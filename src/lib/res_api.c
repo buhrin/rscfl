@@ -463,6 +463,92 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   return -EINVAL;
 }
 
+int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_name)
+{
+  subsys_idx_set* adata = rscfl_get_subsys(handle, acct);
+  int outfd = connect_to_influxDB();
+  if (outfd < 0){
+    perror("Couldn't connect to InfluxDB, is it running?");
+    return -1;
+  }
+
+  char *header = "POST /write?db=%s HTTP/1.0\r\n"
+                 "Content-Type: application/x-www-form-urlencoded\r\n"
+                 "Content-Length: %d\r\n"
+                 "\r\n"
+                 "%s";
+  char *empty_metric = "%s,subsystem=%s,measurement_id=%d value=%d\n"; // maybe need /r/n?
+  char *message = (char *) malloc(MESSAGE_BUFFER_SIZE);
+  char *response = (char *) malloc(RESPONSE_BUFFER_SIZE);
+  int empty_header_length = strlen(header) - 6;
+  int remaining_body_length = MESSAGE_BUFFER_SIZE - empty_header_length - strlen(app_name) - 5; // the -5 represents the integer for content length in the header, which is unlikely to exceed 99999.
+  char *body = (char *) malloc(remaining_body_length);
+  char *metric = (char *) malloc(256);
+  char *subsystem_metrics = (char *) malloc(1024);
+
+  printf("\nempty_header_length:%d ,remaining_body_length%d\n", empty_header_length, remaining_body_length);
+
+  int i;
+  for(i = 0; i < adata->set_size; i++){
+    // use the reverse index ids to find out what subsystem we're looking at
+    // in adata->set[i]:
+    short subsys_id = adata->ids[i];
+    const char *subsystem_name = rscfl_subsys_name[subsys_id];
+    // the user-readable subsystem name can be obtained by accessing
+    // rscfl_subsys_name[subsys_id]
+    struct subsys_accounting sa_id = adata->set[i];
+    
+    snprintf(metric, 256, empty_metric, "cpu.cycles", subsystem_name, acct->syscall_id, sa_id.cpu.cycles);
+    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
+    memset(metric, 0, sizeof(metric));
+
+    snprintf(metric, 256, empty_metric, "cpu.wall_clock_time", subsystem_name, acct->syscall_id, sa_id.cpu.wall_clock_time);
+    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
+    memset(metric, 0, sizeof(metric));
+
+    snprintf(metric, 256, empty_metric, "sched.cycles_out_local", subsystem_name, acct->syscall_id, sa_id.sched.cycles_out_local);
+    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
+    memset(metric, 0, sizeof(metric));
+
+    snprintf(metric, 256, empty_metric, "sched.wct_out_local", subsystem_name, acct->syscall_id, sa_id.sched.wct_out_local);
+    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
+    memset(metric, 0, sizeof(metric));
+
+    if(strlen(subsystem_metrics) > remaining_body_length){
+      printf("hello123\n");
+      // build the current message and send
+    }
+
+    strncat(body, subsystem_metrics, remaining_body_length);
+    remaining_body_length -= strlen(subsystem_metrics);
+
+    printf("body:%s\n",body);
+    // all relevant data within sa_id:
+    //  - sa.cpu.cycles               : cycles spent in subsystem
+    //  - sa.cpu.wall_clock_time      : wct spent in subsystem
+    //  - sa.sched.cycles_out_local   : cycles spent scheduled-out
+    //  - sa.sched.wct_out_local      : wct spent scheduled-out
+    //  ...
+    //  The ... represent the other members of sa. At the moment we're not
+    //  actually recording any of those extra members (except for extra data
+    //  when running on top of XEN). This is to limit probe effects and not
+    //  a fundamental limitation
+  }
+
+  snprintf(message, MESSAGE_BUFFER_SIZE, header, app_name, strlen(body), body);
+  printf("sending:%s\n",message);
+  send_message(outfd, &message);
+  receive_response(outfd, &response);
+  
+  close(outfd);
+  free(message);
+  free(response);
+  free(body);
+  free(metric);
+  free(subsystem_metrics);
+  free_subsys_idx_set(adata);
+  return 0;
+}
 
 subsys_idx_set* rscfl_get_subsys(rscfl_handle rhdl, struct accounting *acct)
 {
@@ -701,3 +787,87 @@ int rscfl_use_shdw_pages(rscfl_handle rhdl, int use_shdw, int shdw_pages)
   return ioctl(rhdl->fd_ctrl, RSCFL_SHDW_CMD, &ioctl_arg);
 }
 #endif /* SHDW_ENABLED */
+
+/* 
+ * Static functions 
+ */
+
+static int connect_to_influxDB()
+{
+  int portno = 8086;
+  char *host = "localhost";
+
+  struct hostent *server;
+  struct sockaddr_in serv_addr;
+  int sockfd;
+
+  /* create the socket */
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd < 0){
+    perror("ERROR opening socket");
+    return -1;
+  }
+
+  /* lookup the ip address */
+  server = gethostbyname(host);
+  if (server == NULL){
+    perror("ERROR, no such host");
+    return -1;
+  }
+
+  /* fill in the structure */
+  memset(&serv_addr, 0, sizeof(serv_addr));
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons(portno);
+  memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
+
+  /* connect the socket */
+  if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+    return -1;
+
+  return sockfd;
+}
+
+static void send_message(int outfd, char **message)
+{
+  int bytes, sent, total;
+  total = strlen(*message);
+  sent = 0;
+  do
+  {
+    bytes = write(outfd, *message + sent, total - sent);
+    if (bytes < 0){
+      perror("ERROR writing message to socket");
+      return;
+    }
+    if (bytes == 0)
+      break;
+    sent += bytes;
+  } while (sent < total);
+}
+
+static void receive_response(int infd, char **response)
+{
+  int bytes, received, total;
+  memset(*response, 0, RESPONSE_BUFFER_SIZE);
+  total = RESPONSE_BUFFER_SIZE - 1;
+  received = 0;
+  do
+  {   
+    bytes = read(infd, *response + received, total - received);
+    if (bytes < 0){
+      perror("ERROR reading response from socket");
+      return;
+    }
+    if (bytes == 0)
+      break;
+    received += bytes;
+  } while (received < total);
+
+  if (received == total){
+    perror("ERROR storing complete response from socket");
+    return;
+  }
+
+  printf("Response:\n%s\n", *response);
+}

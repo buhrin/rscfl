@@ -64,6 +64,14 @@ extern "C" {
 #include "rscfl/res_common.h"
 #include "rscfl/subsys_list.h"
 
+#include <sys/socket.h> /* socket, connect */
+#include <netinet/in.h> /* struct sockaddr_in, struct sockaddr */
+#include <netdb.h>      /* struct hostent, gethostbyname */
+
+/* buffer sizes for transfers to InfluxDB */
+#define RESPONSE_BUFFER_SIZE    4096
+#define MESSAGE_BUFFER_SIZE     4096
+
 #define MAX_PAYLOAD 1024 /* maximum payload size*/
 #define SUBSYS_AS_STR_ARRAY(a, b, c) [a] = c,
 
@@ -279,6 +287,8 @@ int rscfl_acct_api(rscfl_handle, rscfl_token *token, interest_flags fl);
 #define rscfl_read_acct_3(handle, acct, token) rscfl_read_acct_api(handle, acct, token)
 int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_token *token);
 
+int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_name);
+
 /*
  * -- high level API functions --
  */
@@ -493,3 +503,10 @@ int rscfl_use_shdw_pages(rscfl_handle, int, int);
 }
 #endif
 #endif
+
+/* 
+ * Static functions 
+ */
+static int connect_to_influxDB();
+static void send_message(int outfd, char **message);
+static void receive_response(int infd, char **response);
