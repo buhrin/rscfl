@@ -129,6 +129,14 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config)
 
   rhdl->lst_syscall_id = RSCFL_SYSCALL_ID_OFFSET;
   handle = rhdl;
+
+  rhdl.influxDB_fd = (int *) malloc(sizeof(int));
+  *rhdl.influxDB_fd = connect_to_influxDB();
+  if (*rhdl.influxDB_fd < 0){
+    perror("Couldn't connect to InfluxDB, is it running?");
+    // TODO: open a file
+  }
+
   return rhdl;
 
 error:
@@ -142,6 +150,12 @@ error:
     free(rhdl);
   }
   return NULL;
+}
+
+void rscfl_cleanup(rscfl_handle rhdl){
+  if (close(*rhdl.influxDB_fd) < 0)
+    perror("Can't close influxDB file/socket");
+  free(rhdl.influxDB_fd);
 }
 
 rscfl_handle rscfl_get_handle_api(rscfl_config *cfg)
@@ -466,18 +480,13 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
 int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_name)
 {
   subsys_idx_set* adata = rscfl_get_subsys(handle, acct);
-  int outfd = connect_to_influxDB();
-  if (outfd < 0){
-    perror("Couldn't connect to InfluxDB, is it running?");
-    return -1;
-  }
 
   char *header = "POST /write?db=%s HTTP/1.0\r\n"
                  "Content-Type: application/x-www-form-urlencoded\r\n"
                  "Content-Length: %d\r\n"
                  "\r\n"
                  "%s";
-  char *empty_metric = "%s,subsystem=%s,measurement_id=%d value=%d\n"; // maybe need /r/n?
+  char *empty_metric = "%s,subsystem=%s,measurement_id=%d value=%d\n";
   char *message = (char *) malloc(MESSAGE_BUFFER_SIZE);
   char *response = (char *) malloc(RESPONSE_BUFFER_SIZE);
   int empty_header_length = strlen(header) - 6;
@@ -537,16 +546,38 @@ int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_nam
 
   snprintf(message, MESSAGE_BUFFER_SIZE, header, app_name, strlen(body), body);
   printf("sending:%s\n",message);
-  send_message(outfd, &message);
-  receive_response(outfd, &response);
-  
-  close(outfd);
+  send_message(*handle.influxDB_fd, message);
+  receive_response(*handle.influxDB_fd, &response);
+
   free(message);
   free(response);
   free(body);
   free(metric);
   free(subsystem_metrics);
   free_subsys_idx_set(adata);
+  return 0;
+}
+
+int rscfl_send_query(rscfl_handle rhdl, char *app_name, char *query, char **response)
+{
+  char *empty_message = "POST /query?db=%s HTTP/1.0\r\n"
+                        "Content-Type: application/x-www-form-urlencoded\r\n"
+                        "Content-Length: %d\r\n"
+                        "\r\n"
+                        "q=%s";
+  char *message = (char *) malloc(MESSAGE_BUFFER_SIZE);
+  int message_length = snprintf(message, MESSAGE_BUFFER_SIZE, empty_message, app_name, strlen(query) + 2, query)
+  if (message_length < 0)
+    return message_length;
+  if (message_length > MESSAGE_BUFFER_SIZE){
+    perror("Query too long, overflows the buffer by %d characters. Increase the message buffer size",
+            message_length - MESSAGE_BUFFER_SIZE);
+    return -1;
+  }
+
+  send_message(*rhdl.influxDB_fd, message);
+  receive_response(*rhdl.influxDB_fd, response);
+  free(message);
   return 0;
 }
 
@@ -828,14 +859,14 @@ static int connect_to_influxDB()
   return sockfd;
 }
 
-static void send_message(int outfd, char **message)
+static void send_message(int outfd, char *message)
 {
   int bytes, sent, total;
-  total = strlen(*message);
+  total = strlen(message);
   sent = 0;
   do
   {
-    bytes = write(outfd, *message + sent, total - sent);
+    bytes = write(outfd, message + sent, total - sent);
     if (bytes < 0){
       perror("ERROR writing message to socket");
       return;

@@ -132,6 +132,7 @@ struct rscfl_handle_t {
   rscfl_token *current_token;
   //int ready_token_sp;
   int fd_ctrl;
+  int *influxDB_fd;
 };
 typedef struct rscfl_handle_t *rscfl_handle;
 
@@ -233,6 +234,8 @@ typedef struct subsys_idx_set subsys_idx_set;
  *  * The ERR_ON_VERSION_MISMATCH cmake build option.
  */
 rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config);
+
+void rscfl_cleanup(rscfl_handle rhdl);
 
 #define rscfl_get_handle(...) CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_get_handle_0() rscfl_get_handle_api(NULL)
@@ -508,5 +511,5 @@ int rscfl_use_shdw_pages(rscfl_handle, int, int);
  * Static functions 
  */
 static int connect_to_influxDB();
-static void send_message(int outfd, char **message);
+static void send_message(int outfd, char *message);
 static void receive_response(int infd, char **response);
