@@ -41,7 +41,12 @@
 // macro function definitions
 DEFINE_REDUCE_FUNCTION(rint, ru64)
 DEFINE_REDUCE_FUNCTION(wc, struct timespec)
-
+#define EXTRACT_METRIC(metric_name)                                                                           \
+  snprintf(metric, 256, empty_metric, #metric_name, subsystem_name, acct->syscall_id, sa_id.metric_name);      \
+  subsystem_metrics_length += strlen(metric);                                                                 \
+  strncat(subsystem_metrics, metric, 256);                                                                    \
+  memset(metric, 0, sizeof(metric));
+  
 // define subsystem name array for user-space includes of subsys_list.h
 const char *rscfl_subsys_name[NUM_SUBSYSTEMS] = {
     SUBSYS_TABLE(SUBSYS_AS_STR_ARRAY)
@@ -127,16 +132,16 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config)
     goto error;
   }
 
+  /* Import data from any existing files to the databases */
+  // system("/home/branislavuhrin/RMF/source/InfluxDB_import");
+  // system("/home/branislavuhrin/RMF/source/MongoDB_import");
+  rhdl->curl = NULL;
+  rhdl->influx_fd = -1;
+  rhdl->mongoc = NULL;
+  rhdl->mongo_fd = -1;
+
   rhdl->lst_syscall_id = RSCFL_SYSCALL_ID_OFFSET;
   handle = rhdl;
-
-  rhdl.influxDB_fd = (int *) malloc(sizeof(int));
-  *rhdl.influxDB_fd = connect_to_influxDB();
-  if (*rhdl.influxDB_fd < 0){
-    perror("Couldn't connect to InfluxDB, is it running?");
-    // TODO: open a file
-  }
-
   return rhdl;
 
 error:
@@ -152,10 +157,52 @@ error:
   return NULL;
 }
 
+void rscfl_enable_persistent_storage(rscfl_handle rhdl, char *app_name){
+  if (strlen(app_name) > 31 || strncpy(rhdl->app_name, app_name, sizeof(rhdl->app_name)) == NULL)
+  {
+    fprintf(stderr, "Couldn't store application name (Maybe it's too long?). Persistent storage is not supported.\n");
+  } else {
+    rhdl->curl = connect_to_influxDB();
+    if (rhdl->curl == NULL){
+      printf("Couldn't connect to influxDB, opening a file for writing\n");
+      rhdl->influx_fd = open_influxDB_file(app_name);
+    }
+    if (rhdl->curl == NULL && rhdl->influx_fd == -1){
+      fprintf(stderr, "Couldn't connect to influxDB or open a file for writing. Persistent storage is not supported.\n");
+    } else {
+      rhdl->mongoc = connect_to_mongoDB(app_name);
+      if (rhdl->mongoc == NULL){
+        printf("Couldn't connect to mongoDB, opening a file for writing\n");
+        rhdl->mongo_fd = open_mongoDB_file(app_name);
+        if (rhdl->mongo_fd == -1){
+          fprintf(stderr, "Couldn't connect to mongoDB or open a file for writing. Storing extra data is not supported.\n");
+        }
+      }
+    }
+  }
+}
+
 void rscfl_cleanup(rscfl_handle rhdl){
-  if (close(*rhdl.influxDB_fd) < 0)
-    perror("Can't close influxDB file/socket");
-  free(rhdl.influxDB_fd);
+  if (rhdl->curl != NULL){
+    curl_easy_cleanup(rhdl->curl);
+    rhdl->curl = NULL;
+  }
+  if (rhdl->influx_fd != -1){
+    close(rhdl->influx_fd);
+    rhdl->influx_fd = -1;
+  }
+  if (rhdl->mongoc != NULL){
+    mongoc_collection_destroy(rhdl->mongoc->collection);
+    mongoc_database_destroy(rhdl->mongoc->database);
+    mongoc_client_destroy(rhdl->mongoc->client);
+    mongoc_cleanup();
+    free(rhdl->mongoc);
+    rhdl->mongoc = NULL;
+  }
+  if (rhdl->mongo_fd != -1){
+    close(rhdl->mongo_fd);
+    rhdl->mongo_fd = -1;
+  }
 }
 
 rscfl_handle rscfl_get_handle_api(rscfl_config *cfg)
@@ -481,103 +528,47 @@ int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_nam
 {
   subsys_idx_set* adata = rscfl_get_subsys(handle, acct);
 
-  char *header = "POST /write?db=%s HTTP/1.0\r\n"
-                 "Content-Type: application/x-www-form-urlencoded\r\n"
-                 "Content-Length: %d\r\n"
-                 "\r\n"
-                 "%s";
   char *empty_metric = "%s,subsystem=%s,measurement_id=%d value=%d\n";
-  char *message = (char *) malloc(MESSAGE_BUFFER_SIZE);
-  char *response = (char *) malloc(RESPONSE_BUFFER_SIZE);
-  int empty_header_length = strlen(header) - 6;
-  int remaining_body_length = MESSAGE_BUFFER_SIZE - empty_header_length - strlen(app_name) - 5; // the -5 represents the integer for content length in the header, which is unlikely to exceed 99999.
-  char *body = (char *) malloc(remaining_body_length);
   char *metric = (char *) malloc(256);
   char *subsystem_metrics = (char *) malloc(1024);
-
-  printf("\nempty_header_length:%d ,remaining_body_length%d\n", empty_header_length, remaining_body_length);
+  char *measurements = (char *) malloc(65536);
+  int measurements_remaining_length = 65536;
+  int subsystem_metrics_length = 0;
 
   int i;
+  printf("adata->set_size:%d\n",adata->set_size);
   for(i = 0; i < adata->set_size; i++){
-    // use the reverse index ids to find out what subsystem we're looking at
-    // in adata->set[i]:
     short subsys_id = adata->ids[i];
     const char *subsystem_name = rscfl_subsys_name[subsys_id];
-    // the user-readable subsystem name can be obtained by accessing
-    // rscfl_subsys_name[subsys_id]
+    printf("subsystem_name:%s\n",subsystem_name);
+
     struct subsys_accounting sa_id = adata->set[i];
     
-    snprintf(metric, 256, empty_metric, "cpu.cycles", subsystem_name, acct->syscall_id, sa_id.cpu.cycles);
-    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
-    memset(metric, 0, sizeof(metric));
+    EXTRACT_METRIC(cpu.cycles)
+    EXTRACT_METRIC(cpu.wall_clock_time)
+    EXTRACT_METRIC(sched.cycles_out_local)
+    EXTRACT_METRIC(sched.wct_out_local)
+    
+    printf("subsystem_metrics:%s\n",subsystem_metrics);
 
-    snprintf(metric, 256, empty_metric, "cpu.wall_clock_time", subsystem_name, acct->syscall_id, sa_id.cpu.wall_clock_time);
-    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
-    memset(metric, 0, sizeof(metric));
-
-    snprintf(metric, 256, empty_metric, "sched.cycles_out_local", subsystem_name, acct->syscall_id, sa_id.sched.cycles_out_local);
-    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
-    memset(metric, 0, sizeof(metric));
-
-    snprintf(metric, 256, empty_metric, "sched.wct_out_local", subsystem_name, acct->syscall_id, sa_id.sched.wct_out_local);
-    strncat(subsystem_metrics, metric, sizeof(subsystem_metrics) - strlen(subsystem_metrics));
-    memset(metric, 0, sizeof(metric));
-
-    if(strlen(subsystem_metrics) > remaining_body_length){
-      printf("hello123\n");
-      // build the current message and send
+    if(strlen(subsystem_metrics) > measurements_remaining_length){
+      store_measurements(rhdl, measurements);
+      free(measurements);
+      measurements = (char *) malloc(65536);
+      measurements_remaining_length = 65536;
     }
 
-    strncat(body, subsystem_metrics, remaining_body_length);
-    remaining_body_length -= strlen(subsystem_metrics);
-
-    printf("body:%s\n",body);
-    // all relevant data within sa_id:
-    //  - sa.cpu.cycles               : cycles spent in subsystem
-    //  - sa.cpu.wall_clock_time      : wct spent in subsystem
-    //  - sa.sched.cycles_out_local   : cycles spent scheduled-out
-    //  - sa.sched.wct_out_local      : wct spent scheduled-out
-    //  ...
-    //  The ... represent the other members of sa. At the moment we're not
-    //  actually recording any of those extra members (except for extra data
-    //  when running on top of XEN). This is to limit probe effects and not
-    //  a fundamental limitation
+    strncat(measurements, subsystem_metrics, measurements_remaining_length);
+    measurements_remaining_length -= subsystem_metrics_length;
+    subsystem_metrics_length = 0;
   }
 
-  snprintf(message, MESSAGE_BUFFER_SIZE, header, app_name, strlen(body), body);
-  printf("sending:%s\n",message);
-  send_message(*handle.influxDB_fd, message);
-  receive_response(*handle.influxDB_fd, &response);
+  store_measurements(rhdl, measurements);
 
-  free(message);
-  free(response);
-  free(body);
+  free(measurements);
   free(metric);
   free(subsystem_metrics);
   free_subsys_idx_set(adata);
-  return 0;
-}
-
-int rscfl_send_query(rscfl_handle rhdl, char *app_name, char *query, char **response)
-{
-  char *empty_message = "POST /query?db=%s HTTP/1.0\r\n"
-                        "Content-Type: application/x-www-form-urlencoded\r\n"
-                        "Content-Length: %d\r\n"
-                        "\r\n"
-                        "q=%s";
-  char *message = (char *) malloc(MESSAGE_BUFFER_SIZE);
-  int message_length = snprintf(message, MESSAGE_BUFFER_SIZE, empty_message, app_name, strlen(query) + 2, query)
-  if (message_length < 0)
-    return message_length;
-  if (message_length > MESSAGE_BUFFER_SIZE){
-    perror("Query too long, overflows the buffer by %d characters. Increase the message buffer size",
-            message_length - MESSAGE_BUFFER_SIZE);
-    return -1;
-  }
-
-  send_message(*rhdl.influxDB_fd, message);
-  receive_response(*rhdl.influxDB_fd, response);
-  free(message);
   return 0;
 }
 
@@ -823,82 +814,264 @@ int rscfl_use_shdw_pages(rscfl_handle rhdl, int use_shdw, int shdw_pages)
  * Static functions 
  */
 
-static int connect_to_influxDB()
+static int open_file(char *db_name, char *app_name, char *extension)
 {
-  int portno = 8086;
-  char *host = "localhost";
+  char filepath[128];
 
-  struct hostent *server;
-  struct sockaddr_in serv_addr;
-  int sockfd;
-
-  /* create the socket */
-  sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (sockfd < 0){
-    perror("ERROR opening socket");
+  sprintf(filepath, "/home/branislavuhrin/%s_%s.%s", db_name, app_name, extension);
+  int outfd = open(filepath, O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);        
+  if (outfd < 0){
+    perror("ERROR opening file");
     return -1;
   }
-
-  /* lookup the ip address */
-  server = gethostbyname(host);
-  if (server == NULL){
-    perror("ERROR, no such host");
-    return -1;
-  }
-
-  /* fill in the structure */
-  memset(&serv_addr, 0, sizeof(serv_addr));
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons(portno);
-  memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-
-  /* connect the socket */
-  if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-    return -1;
-
-  return sockfd;
+  return outfd;
 }
 
-static void send_message(int outfd, char *message)
+static int open_influxDB_file(char *app_name)
 {
-  int bytes, sent, total;
-  total = strlen(message);
-  sent = 0;
-  do
+  return open_file("InfluxDB", app_name, "txt");
+}
+
+static CURL *connect_to_influxDB(void)
+{
+  CURL *curl = curl_easy_init();
+  int rv;
+  if (curl != NULL)
   {
-    bytes = write(outfd, message + sent, total - sent);
-    if (bytes < 0){
-      perror("ERROR writing message to socket");
-      return;
-    }
-    if (bytes == 0)
-      break;
-    sent += bytes;
-  } while (sent < total);
+    if (rv = curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:8086")) {goto error;}
+    if (rv = curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L)) {goto error;}
+    if (rv = curl_easy_perform(curl)) {goto error;}
+    if (rv = curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 0L)) {goto error;}
+  }
+  return curl;
+error:
+  fprintf(stderr, "libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+  curl_easy_cleanup(curl);
+  return NULL;
 }
 
-static void receive_response(int infd, char **response)
+static int open_mongoDB_file(char *app_name)
 {
-  int bytes, received, total;
-  memset(*response, 0, RESPONSE_BUFFER_SIZE);
-  total = RESPONSE_BUFFER_SIZE - 1;
-  received = 0;
-  do
-  {   
-    bytes = read(infd, *response + received, total - received);
-    if (bytes < 0){
-      perror("ERROR reading response from socket");
-      return;
-    }
-    if (bytes == 0)
-      break;
-    received += bytes;
-  } while (received < total);
+  return open_file("MongoDB", app_name, "json");
+}
 
-  if (received == total){
-    perror("ERROR storing complete response from socket");
-    return;
+static mongoc_info_t *connect_to_mongoDB(char *app_name)
+{
+  const char *uri_str = "mongodb://localhost:27017/?appname=rscfl";
+  mongoc_client_t *client;
+  mongoc_database_t *database;
+  mongoc_collection_t *collection;
+  bson_t *command, reply;
+  bson_error_t error;
+  bool retval;
+  mongoc_info_t *info;
+
+  mongoc_init();
+
+  /* create a new mongoDB client instance */
+  client = mongoc_client_new(uri_str);
+  
+  /* Try to ping the 'admin' database to see if mongoDB is running */
+  command = BCON_NEW("ping", BCON_INT32(1));
+  retval = mongoc_client_command_simple(client, "admin", command, NULL, &reply, &error);
+  if (!retval) {
+    /* if it's not running then return */
+    fprintf(stderr, "%s\n", error.message);
+    mongoc_client_destroy(client);
+    mongoc_cleanup();
+    return NULL;
   }
 
-  printf("Response:\n%s\n", *response);
+  /* Get a handle on the correct database and collection */
+  database = mongoc_client_get_database(client, app_name);
+  collection = mongoc_client_get_collection(client, app_name, "main_collection");
+
+  info = (mongoc_info_t *) malloc(sizeof(mongoc_info_t));
+  if (info == NULL){
+    perror("Couldn't allocate memory for mongoc_info_t struct.");
+    mongoc_collection_destroy(collection);
+    mongoc_database_destroy(database);
+    mongoc_client_destroy(client);
+    mongoc_cleanup();
+    return NULL;
+  } else {
+    info->client = client;
+    info->collection = collection;
+    info->database = database;
+    return info;
+  }
+}
+
+static int store_measurements(rscfl_handle rhdl, char *measurements)
+{
+  if (rhdl->curl != NULL){
+    int rv;
+    char url[64];
+    snprintf(url, 64, "http://localhost:8086/write?db=%s", rhdl->app_name);
+    
+    if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, url) != CURLE_OK){
+      fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
+      return -1;
+    }
+    curl_easy_setopt(rhdl->curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, measurements);
+    
+    if (rv = curl_easy_perform(rhdl->curl))
+    {
+      fprintf(stderr, "Can't send measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+      return -1;
+    }
+    long response_code;
+    curl_easy_getinfo(rhdl->curl, CURLINFO_RESPONSE_CODE, &response_code);
+    
+    if (response_code == 404)
+    {
+      /* create database */
+      if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, "http://localhost:8086/query") != CURLE_OK){
+        fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
+        return -1;
+      }
+      char message[64];
+      snprintf(message, 64, "q=CREATE DATABASE \"%s\"", rhdl->app_name);
+      curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, message);
+      if (rv = curl_easy_perform(rhdl->curl))
+      {
+        fprintf(stderr, "Can't create new database - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+        return -1;
+      }
+
+      /* resend message */
+      if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, url) != CURLE_OK){
+        fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
+        return -1;
+      }
+      curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, measurements);
+      
+      if (rv = curl_easy_perform(rhdl->curl))
+      {
+        fprintf(stderr, "Can't send measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+        return -1;
+      }
+    }
+  } else if (rhdl->influx_fd != -1){
+    int bytes, written, total;
+    total = strlen(measurements);
+    written = 0;
+    do
+    {
+      bytes = write(rhdl->influx_fd, measurements + written, total - written);
+      if (bytes < 0)
+        perror("ERROR writing message to file");
+      if (bytes == 0)
+        break;
+      written += bytes;
+    } while (written < total);
+  } else {
+    fprintf(stderr, "Measurement not stored because persistent storage is disabled.\n");
+    return -1;
+  }
+  return 0;
+}
+
+static int store_extra_data(rscfl_handle rhdl, char *json)
+{
+  if (rhdl->mongoc != NULL){
+    bson_t *insert;
+    bson_error_t error;
+    insert = bson_new_from_json((const uint8_t *)json, -1, &error);
+
+    if (insert == NULL){
+      fprintf(stderr, "%s\n", error.message);
+      return -1;
+    }
+
+    if (!mongoc_collection_insert(rhdl->mongoc->collection, MONGOC_INSERT_NONE, insert, NULL, &error)){
+      fprintf(stderr, "%s\n", error.message);
+    }
+    bson_destroy(insert);
+
+  } else if (rhdl->mongo_fd != -1){
+    int bytes, written, total;
+    total = strlen(json);
+    written = 0;
+    do
+    {
+      bytes = write(rhdl->mongo_fd, json + written, total - written);
+      if (bytes < 0)
+        perror("ERROR writing message to file");
+      if (bytes == 0)
+        break;
+      written += bytes;
+    } while (written < total);
+  } else {
+    fprintf(stderr, "Extra data not stored because persistent storage is disabled.\n");
+    return -1;
+  }
+  return 0;
+}
+
+static int query_measurements(rscfl_handle rhdl, char *query)
+{
+  if (rhdl->curl != NULL){
+    int rv;
+    char url[64];
+    snprintf(url, 64, "http://localhost:8086/query?db=%s", rhdl->app_name);
+    
+    if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, url) != CURLE_OK){
+      fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
+      return -1;
+    }
+    char message[128];
+    snprintf(message, 128, "q=%s", query);
+    curl_easy_setopt(rhdl->curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, message);
+    
+    if (rv = curl_easy_perform(rhdl->curl))
+    {
+      fprintf(stderr, "Can't send measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+      return -1;
+    }
+    return 0;
+  } else {
+    fprintf(stderr, "Database not queried because persistent storage is disabled.\n");
+    return -1;
+  }
+}
+
+static int query_extra_data(rscfl_handle rhdl, char *query, char *options)
+{
+  bson_t *filter;
+  bson_t *opts;
+  mongoc_cursor_t *cursor;
+  bson_error_t error;
+  const bson_t *doc;
+  char *str;
+
+  filter = bson_new_from_json((const uint8_t *)query, -1, &error);
+  if (filter == NULL){
+    fprintf(stderr, "Couldn't parse query. Error: %s\n", error.message);
+    return -1;
+  }
+  opts = bson_new_from_json((const uint8_t *)options, -1, &error);
+  if (opts == NULL){
+    fprintf(stderr, "Couldn't parse query options. Error: %s\n", error.message);
+    return -1;
+  }
+
+  cursor = mongoc_collection_find_with_opts(rhdl->mongoc->collection, filter, opts, NULL);
+
+  while (mongoc_cursor_next(cursor, &doc)){
+    str = bson_as_canonical_extended_json(doc, NULL);
+    printf("%s\n", str);
+    bson_free(str);
+  }
+
+  if (mongoc_cursor_error(cursor, &error)){
+    fprintf (stderr, "An error occurred: %s\n", error.message);
+  }
+
+  mongoc_cursor_destroy(cursor);
+  bson_destroy(filter);
+  bson_destroy(opts);
+  return 0;
 }

@@ -132,7 +132,12 @@ struct rscfl_handle_t {
   rscfl_token *current_token;
   //int ready_token_sp;
   int fd_ctrl;
-  int *influxDB_fd;
+  
+  int influx_fd;  // influxDB backup file descriptor
+  int mongo_fd;   // mongoDB backup file descriptor
+  CURL *curl;     // influxDB socket handle
+  mongoc_info_t *mongoc;   // mongoDB socket handle
+  char app_name[32];  // app name - to be used for tagging data
 };
 typedef struct rscfl_handle_t *rscfl_handle;
 
@@ -167,6 +172,11 @@ struct subsys_idx_set {
 };
 typedef struct subsys_idx_set subsys_idx_set;
 
+typedef struct mongoc_info {
+  mongoc_client_t *client;
+  mongoc_database_t *database;
+  mongoc_collection_t *collection;
+} mongoc_info_t;
 
 /****************************
  *
@@ -236,6 +246,7 @@ typedef struct subsys_idx_set subsys_idx_set;
 rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config);
 
 void rscfl_cleanup(rscfl_handle rhdl);
+void rscfl_enable_persistent_storage(rscfl_handle rhdl, char *app_name);
 
 #define rscfl_get_handle(...) CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_get_handle_0() rscfl_get_handle_api(NULL)
@@ -510,6 +521,13 @@ int rscfl_use_shdw_pages(rscfl_handle, int, int);
 /* 
  * Static functions 
  */
-static int connect_to_influxDB();
-static void send_message(int outfd, char *message);
-static void receive_response(int infd, char **response);
+
+static CURL *connect_to_influxDB(void);
+static int open_file(char *db_name, char *app_name, char *extension);
+static int open_influxDB_file(char *app_name);
+static int open_mongoDB_file(char *app_name);
+static mongoc_info_t *connect_to_mongoDB(char *app_name);
+static int store_measurements(rhdl_t rhdl, char *measurements);
+static int store_extra_data(rhdl_t rhdl, char *json);
+static int query_measurements(rhdl_t rhdl, char *query);
+static int query_extra_data(rhdl_t rhdl, char *query, char *options);
