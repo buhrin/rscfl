@@ -56,6 +56,9 @@
 #ifndef _RES_API_H_
 #define _RES_API_H_
 
+#include <mongoc.h>     /* mongoDB API */
+#include <curl/curl.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,13 +67,6 @@ extern "C" {
 #include "rscfl/res_common.h"
 #include "rscfl/subsys_list.h"
 
-#include <sys/socket.h> /* socket, connect */
-#include <netinet/in.h> /* struct sockaddr_in, struct sockaddr */
-#include <netdb.h>      /* struct hostent, gethostbyname */
-
-/* buffer sizes for transfers to InfluxDB */
-#define RESPONSE_BUFFER_SIZE    4096
-#define MESSAGE_BUFFER_SIZE     4096
 
 #define MAX_PAYLOAD 1024 /* maximum payload size*/
 #define SUBSYS_AS_STR_ARRAY(a, b, c) [a] = c,
@@ -110,6 +106,11 @@ struct rscfl_token_list {
 };
 typedef struct rscfl_token_list rscfl_token_list;
 
+typedef struct mongoc_info {
+  mongoc_client_t *client;
+  mongoc_database_t *database;
+  mongoc_collection_t *collection;
+} mongoc_info_t;
 
 /*
  * rscfl_handle_t* (typedef-ed to rscfl_handle) represents the user-space
@@ -171,12 +172,6 @@ struct subsys_idx_set {
   short max_set_size;
 };
 typedef struct subsys_idx_set subsys_idx_set;
-
-typedef struct mongoc_info {
-  mongoc_client_t *client;
-  mongoc_database_t *database;
-  mongoc_collection_t *collection;
-} mongoc_info_t;
 
 /****************************
  *
@@ -513,11 +508,6 @@ int rscfl_spawn_shdw(rscfl_handle, shdw_hdl *);
 
 int rscfl_use_shdw_pages(rscfl_handle, int, int);
 
-#ifdef __cplusplus
-}
-#endif
-#endif
-
 /* 
  * Static functions 
  */
@@ -527,7 +517,13 @@ static int open_file(char *db_name, char *app_name, char *extension);
 static int open_influxDB_file(char *app_name);
 static int open_mongoDB_file(char *app_name);
 static mongoc_info_t *connect_to_mongoDB(char *app_name);
-static int store_measurements(rhdl_t rhdl, char *measurements);
-static int store_extra_data(rhdl_t rhdl, char *json);
-static int query_measurements(rhdl_t rhdl, char *query);
-static int query_extra_data(rhdl_t rhdl, char *query, char *options);
+static int store_measurements(rscfl_handle rhdl, char *measurements);
+static int store_extra_data(rscfl_handle rhdl, char *json);
+static int query_measurements(rscfl_handle rhdl, char *query);
+static int query_extra_data(rscfl_handle rhdl, char *query, char *options);
+static char *spaces_to_underscores(const char *string);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
