@@ -194,7 +194,7 @@ typedef struct subsys_idx_set subsys_idx_set;
  * In each case, the actual function being called is rscfl_init_api(...).
  */
 #define rscfl_init(...) CONCAT(rscfl_init_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_init_0() rscfl_init_api(RSCFL_VERSION, NULL)
+#define rscfl_init_0() rscfl_init_api(RSCFL_VERSION, NULL, NULL, 0)
 /*
  * Do not call directly. use the rscfl_init(...) macro instead.
  *
@@ -202,7 +202,9 @@ typedef struct subsys_idx_set subsys_idx_set;
  *                macro to RSCFL_VERSION
  * \param cfg     rscfl configuration. use the same configuration for all
  */
-#define rscfl_init_1(cfg) rscfl_init_api(RSCFL_VERSION, cfg)
+#define rscfl_init_1(cfg) rscfl_init_api(RSCFL_VERSION, cfg, NULL, 0)
+#define rscfl_init_2(app_name, need_extra_data) rscfl_init_api(RSCFL_VERSION, NULL, app_name, need_extra_data)
+#define rscfl_init_3(cfg, app_name, need_extra_data) rscfl_init_api(RSCFL_VERSION, cfg, app_name, need_extra_data)
 /**
  * Initialises rscfl for the calling thread.
  *
@@ -238,10 +240,9 @@ typedef struct subsys_idx_set subsys_idx_set;
  *  * RSCFL_ERR_VERSION_MISMATCH (in config.h).
  *  * The ERR_ON_VERSION_MISMATCH cmake build option.
  */
-rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config);
+rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config, char *app_name, bool need_extra_data);
 
 void rscfl_cleanup(rscfl_handle rhdl);
-void rscfl_enable_persistent_storage(rscfl_handle rhdl, char *app_name);
 
 #define rscfl_get_handle(...) CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_get_handle_0() rscfl_get_handle_api(NULL)
@@ -296,7 +297,7 @@ int rscfl_acct_api(rscfl_handle, rscfl_token *token, interest_flags fl);
 #define rscfl_read_acct_3(handle, acct, token) rscfl_read_acct_api(handle, acct, token)
 int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_token *token);
 
-int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_name);
+int rscfl_store_acct(rscfl_handle handle, struct accounting *acct);
 
 /*
  * -- high level API functions --

@@ -42,11 +42,14 @@
 DEFINE_REDUCE_FUNCTION(rint, ru64)
 DEFINE_REDUCE_FUNCTION(wc, struct timespec)
 #define EXTRACT_METRIC(metric_name)                                                                           \
-  snprintf(metric, 256, empty_metric, #metric_name, subsystem_name, acct->syscall_id, sa_id.metric_name);      \
-  subsystem_metrics_length += strlen(metric);                                                                 \
+  snprintf(metric, 256, empty_metric, #metric_name, subsystem_name, acct->syscall_id, sa_id.metric_name);     \
   strncat(subsystem_metrics, metric, 256);                                                                    \
-  memset(metric, 0, sizeof(metric));
+  memset(metric, 0, METRIC_BUFFER_SIZE);
   
+#define METRIC_BUFFER_SIZE             256
+#define SUBSYSTEM_METRICS_BUFFER_SIZE  4*METRIC_BUFFER_SIZE   // should be (number of metrics in subsys_accounting)*METRIC_BUFFER_SIZE
+#define MEASUREMENTS_BUFFER_SIZE       65536
+
 // define subsystem name array for user-space includes of subsys_list.h
 const char *rscfl_subsys_name[NUM_SUBSYSTEMS] = {
     SUBSYS_TABLE(SUBSYS_AS_STR_ARRAY)
@@ -58,7 +61,7 @@ __thread rscfl_handle handle = NULL;
 syscall_interest_t dummy_interest;
 #endif
 
-rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config)
+rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config, char *app_name, bool need_extra_data)
 {
   struct stat sb;
   void *ctrl, *buf;
@@ -85,6 +88,37 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config)
   if (!rhdl) {
     fprintf(stderr, "Unable to allocate memory for rscfl handle\n");
     return NULL;
+  }
+
+  /* Import data from any existing files to the databases */
+  // system("/home/branislavuhrin/RMF/source/InfluxDB_import");
+  // system("/home/branislavuhrin/RMF/source/MongoDB_import");
+  
+  rhdl->curl = NULL;
+  rhdl->influx_fd = -1;
+  rhdl->mongoc = NULL;
+  rhdl->mongo_fd = -1;
+
+  if (app_name != NULL && strlen(app_name) < 32 && strncpy(rhdl->app_name, app_name, sizeof(rhdl->app_name)) != NULL){
+    rhdl->curl = connect_to_influxDB();
+    if (rhdl->curl == NULL){
+      printf("Couldn't connect to influxDB, opening a file for writing\n");
+      rhdl->influx_fd = open_influxDB_file(app_name);
+    }
+    if (rhdl->curl == NULL && rhdl->influx_fd == -1){
+      fprintf(stderr, "Couldn't connect to influxDB or open a file for writing. Persistent storage is not supported.\n");
+    } else if (need_extra_data) {
+      rhdl->mongoc = connect_to_mongoDB(app_name);
+      if (rhdl->mongoc == NULL){
+        printf("Couldn't connect to mongoDB, opening a file for writing\n");
+        rhdl->mongo_fd = open_mongoDB_file(app_name);
+        if (rhdl->mongo_fd == -1){
+          fprintf(stderr, "Couldn't connect to mongoDB or open a file for writing. Storing extra data is not supported.\n");
+        }
+      }
+    }
+  } else {
+    printf("Persistent storage is disabled.\n");
   }
 
   if ((fd_data == -1) || (fd_ctrl == -1)) {
@@ -132,13 +166,6 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config)
     goto error;
   }
 
-  /* Import data from any existing files to the databases */
-  // system("/home/branislavuhrin/RMF/source/InfluxDB_import");
-  // system("/home/branislavuhrin/RMF/source/MongoDB_import");
-  rhdl->curl = NULL;
-  rhdl->influx_fd = -1;
-  rhdl->mongoc = NULL;
-  rhdl->mongo_fd = -1;
 
   rhdl->lst_syscall_id = RSCFL_SYSCALL_ID_OFFSET;
   handle = rhdl;
@@ -157,30 +184,6 @@ error:
   return NULL;
 }
 
-void rscfl_enable_persistent_storage(rscfl_handle rhdl, char *app_name){
-  if (strlen(app_name) > 31 || strncpy(rhdl->app_name, app_name, sizeof(rhdl->app_name)) == NULL)
-  {
-    fprintf(stderr, "Couldn't store application name (Maybe it's too long?). Persistent storage is not supported.\n");
-  } else {
-    rhdl->curl = connect_to_influxDB();
-    if (rhdl->curl == NULL){
-      printf("Couldn't connect to influxDB, opening a file for writing\n");
-      rhdl->influx_fd = open_influxDB_file(app_name);
-    }
-    if (rhdl->curl == NULL && rhdl->influx_fd == -1){
-      fprintf(stderr, "Couldn't connect to influxDB or open a file for writing. Persistent storage is not supported.\n");
-    } else {
-      rhdl->mongoc = connect_to_mongoDB(app_name);
-      if (rhdl->mongoc == NULL){
-        printf("Couldn't connect to mongoDB, opening a file for writing\n");
-        rhdl->mongo_fd = open_mongoDB_file(app_name);
-        if (rhdl->mongo_fd == -1){
-          fprintf(stderr, "Couldn't connect to mongoDB or open a file for writing. Storing extra data is not supported.\n");
-        }
-      }
-    }
-  }
-}
 
 void rscfl_cleanup(rscfl_handle rhdl){
   if (rhdl->curl != NULL){
@@ -524,22 +527,21 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   return -EINVAL;
 }
 
-int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_name)
+int rscfl_store_acct(rscfl_handle rhdl, struct accounting *acct)
 {
-  subsys_idx_set* adata = rscfl_get_subsys(handle, acct);
+  subsys_idx_set* adata = rscfl_get_subsys(rhdl, acct);
 
-  char *empty_metric = "%s,subsystem=%s,measurement_id=%d value=%d\n";
-  char *metric = (char *) malloc(256);
-  char *subsystem_metrics = (char *) malloc(1024);
-  char *measurements = (char *) malloc(65536);
-  int measurements_remaining_length = 65536;
-  int subsystem_metrics_length = 0;
-
+  char *empty_metric = "%s,subsystem=%s,measurement_id=%d value=%d\n"; 
+  char metric[METRIC_BUFFER_SIZE] = {0};
+  char subsystem_metrics[SUBSYSTEM_METRICS_BUFFER_SIZE] = {0};
+  char measurements[MEASUREMENTS_BUFFER_SIZE] = {0};
+  int measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
+  
   int i;
   printf("adata->set_size:%d\n",adata->set_size);
   for(i = 0; i < adata->set_size; i++){
     short subsys_id = adata->ids[i];
-    const char *subsystem_name = rscfl_subsys_name[subsys_id];
+    char *subsystem_name = spaces_to_underscores(rscfl_subsys_name[subsys_id]);
     printf("subsystem_name:%s\n",subsystem_name);
 
     struct subsys_accounting sa_id = adata->set[i];
@@ -553,21 +555,19 @@ int rscfl_store_acct(rscfl_handle handle, struct accounting *acct, char* app_nam
 
     if(strlen(subsystem_metrics) > measurements_remaining_length){
       store_measurements(rhdl, measurements);
-      free(measurements);
-      measurements = (char *) malloc(65536);
-      measurements_remaining_length = 65536;
+      printf("sent:%s\n",measurements);
+      memset(measurements, 0, MEASUREMENTS_BUFFER_SIZE);
+      measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
     }
 
     strncat(measurements, subsystem_metrics, measurements_remaining_length);
-    measurements_remaining_length -= subsystem_metrics_length;
-    subsystem_metrics_length = 0;
+    measurements_remaining_length -= strlen(subsystem_metrics);
+    memset(subsystem_metrics, 0, SUBSYSTEM_METRICS_BUFFER_SIZE);
+    free(subsystem_name);
   }
-
   store_measurements(rhdl, measurements);
+  printf("sent:%s\n",measurements);
 
-  free(measurements);
-  free(metric);
-  free(subsystem_metrics);
   free_subsys_idx_set(adata);
   return 0;
 }
@@ -818,7 +818,7 @@ static int open_file(char *db_name, char *app_name, char *extension)
 {
   char filepath[128];
 
-  sprintf(filepath, "/home/branislavuhrin/%s_%s.%s", db_name, app_name, extension);
+  sprintf(filepath, "/home/bu214/%s_%s.%s", db_name, app_name, extension);
   int outfd = open(filepath, O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);        
   if (outfd < 0){
     perror("ERROR opening file");
@@ -842,6 +842,7 @@ static CURL *connect_to_influxDB(void)
     if (rv = curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L)) {goto error;}
     if (rv = curl_easy_perform(curl)) {goto error;}
     if (rv = curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 0L)) {goto error;}
+    if (rv = curl_easy_setopt(curl, CURLOPT_POST, 1L)) {goto error;}
   }
   return curl;
 error:
@@ -913,7 +914,6 @@ static int store_measurements(rscfl_handle rhdl, char *measurements)
       fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
       return -1;
     }
-    curl_easy_setopt(rhdl->curl, CURLOPT_POST, 1L);
     curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, measurements);
     
     if (rv = curl_easy_perform(rhdl->curl))
@@ -1023,7 +1023,6 @@ static int query_measurements(rscfl_handle rhdl, char *query)
     }
     char message[128];
     snprintf(message, 128, "q=%s", query);
-    curl_easy_setopt(rhdl->curl, CURLOPT_POST, 1L);
     curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, message);
     
     if (rv = curl_easy_perform(rhdl->curl))
@@ -1074,4 +1073,20 @@ static int query_extra_data(rscfl_handle rhdl, char *query, char *options)
   bson_destroy(filter);
   bson_destroy(opts);
   return 0;
+}
+
+static char *spaces_to_underscores(const char *string)
+{
+  char *new_string = malloc(sizeof(char) * (strlen(string) + 1));
+  char *new_string_iterator = new_string;
+  for (; *string; ++string, ++new_string_iterator)
+  {
+    if (*string == ' '){
+      *new_string_iterator = '_';
+    } else {
+      *new_string_iterator = *string;
+    }
+  }
+  new_string_iterator = 0; // null terminator
+  return new_string;
 }
