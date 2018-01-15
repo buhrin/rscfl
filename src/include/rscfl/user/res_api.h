@@ -57,7 +57,7 @@
 #define _RES_API_H_
 
 #include <mongoc.h>     /* mongoDB API */
-#include <curl/curl.h>
+#include <curl/curl.h>  /* libcurl library to connect to InfluxDB */
 
 #ifdef __cplusplus
 extern "C" {
@@ -297,7 +297,17 @@ int rscfl_acct_api(rscfl_handle, rscfl_token *token, interest_flags fl);
 #define rscfl_read_acct_3(handle, acct, token) rscfl_read_acct_api(handle, acct, token)
 int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_token *token);
 
-int rscfl_store_acct(rscfl_handle handle, struct accounting *acct);
+#define rscfl_store_data(...) CONCAT(rscfl_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_store_data_2(handle, data) rscfl_store_data_api(handle, data, 0)
+#define rscfl_store_data_3(handle, data, measurement_id) rscfl_store_data_api(handle, data, measurement_id)
+int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long measurement_id);
+
+#define rscfl_read_and_store_data(...) CONCAT(rscfl_read_and_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_read_and_store_data_1(handle) rscfl_read_and_store_data_api(handle, NULL)
+#define rscfl_read_and_store_data_2(handle, extra_data) rscfl_read_and_store_data_api(handle, extra_data)
+int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json);
+
+int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, char *info_json);
 
 /*
  * -- high level API functions --
@@ -508,21 +518,6 @@ DECLARE_REDUCE_FUNCTION(wc, struct timespec);
 int rscfl_spawn_shdw(rscfl_handle, shdw_hdl *);
 
 int rscfl_use_shdw_pages(rscfl_handle, int, int);
-
-/* 
- * Static functions 
- */
-
-static CURL *connect_to_influxDB(void);
-static int open_file(char *db_name, char *app_name, char *extension);
-static int open_influxDB_file(char *app_name);
-static int open_mongoDB_file(char *app_name);
-static mongoc_info_t *connect_to_mongoDB(char *app_name);
-static int store_measurements(rscfl_handle rhdl, char *measurements);
-static int store_extra_data(rscfl_handle rhdl, char *json);
-static int query_measurements(rscfl_handle rhdl, char *query);
-static int query_extra_data(rscfl_handle rhdl, char *query, char *options);
-static char *spaces_to_underscores(const char *string);
 
 #ifdef __cplusplus
 }
