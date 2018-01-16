@@ -16,9 +16,13 @@ int main(int argc, char** argv) {
       "\t - you have RW permissions on /dev/rscfl-ctrl\n");
     return 1;
   }
+
+  /*
+   * Storing data into database
+   */
   int err;
   struct accounting acct;
-// declare interest in accounting the next system call
+
   err = rscfl_acct(rhdl);
   if(err) fprintf(stderr, "Error accounting for system call 1 [interest]\n");
   FILE *fp = fopen("rscfl_file", "w");
@@ -29,6 +33,23 @@ int main(int argc, char** argv) {
   if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
   fclose(fp);
 //  rscfl_read_and_store_data(rhdl);
+
+  /*
+   * Querying database
+   */
+  // char *string1 = rscfl_query_measurements(rhdl, "select * from \"cpu.cycles\"");
+  // if (string1){
+  //   printf("InfluxDB:\nselect * from \"cpu.cycles\"\n%s\n", string1);
+  //   free(string1);
+  // }
+  // mongoc_cursor_t *cursor = query_extra_data(rhdl, "{}", NULL);
+  // char *string2;
+  // printf("MongoDB:\n");
+  // while (rscfl_get_next_json(cursor, &string2)){
+  //   printf("Document from MongoDB:\n%s\n", string2);
+  //   bson_free(string2);
+  // }
+  // mongoc_cursor_destroy(cursor);
 
   rscfl_cleanup(rhdl);
   return 0;

@@ -133,7 +133,7 @@ struct rscfl_handle_t {
   rscfl_token *current_token;
   //int ready_token_sp;
   int fd_ctrl;
-  
+
   int influx_fd;  // influxDB backup file descriptor
   int mongo_fd;   // mongoDB backup file descriptor
   CURL *curl;     // influxDB socket handle
@@ -308,6 +308,34 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long 
 int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json);
 
 int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, char *info_json);
+
+/*
+ * the char * returned by this function then belongs to the calling
+ * function and needs to be freed using free()
+ */
+char *rscfl_query_measurements(rscfl_handle rhdl, char *query);
+
+/*
+ * the mongoc_cursor_t * returned by this function then belongs to
+ * the calling function and needs to be freed using mongoc_cursor_destroy()
+ */
+mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options);
+
+/*
+ * the string parameter gets allocated memory, and needs to be freed with bson_free()
+ * when the program is done using it, or before using rscfl_get_next_json() again.
+ * The correct way to use this function is in a loop as follows:
+ *  char *string;
+ *  while (rscfl_get_next_json(cursor, &string)){
+ *    // do something with the string (transform into json and parse, or strcpy somewhere else)
+ *    ...
+ *    bson_free(string);
+ *  }
+ *
+ * The return value is true if 'string' contains a new string and false in the
+ * case of an error or when there are no more documents to be returned.
+ */
+bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string);
 
 /*
  * -- high level API functions --
