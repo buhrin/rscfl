@@ -106,11 +106,22 @@ struct rscfl_token_list {
 };
 typedef struct rscfl_token_list rscfl_token_list;
 
-typedef struct mongoc_info {
+typedef struct mongo_handle {
   mongoc_client_t *client;
   mongoc_database_t *database;
   mongoc_collection_t *collection;
-} mongoc_info_t;
+  bool connected;
+  int fd;
+  int pipe_read;
+  int pipe_write;
+} mongo_handle_t;
+
+typedef struct influx_handle {
+  CURL *curl;
+  int fd;
+  int pipe_read;
+  int pipe_write;
+} influx_handle_t;
 
 /*
  * rscfl_handle_t* (typedef-ed to rscfl_handle) represents the user-space
@@ -134,10 +145,8 @@ struct rscfl_handle_t {
   //int ready_token_sp;
   int fd_ctrl;
 
-  int influx_fd;  // influxDB backup file descriptor
-  int mongo_fd;   // mongoDB backup file descriptor
-  CURL *curl;     // influxDB socket handle
-  mongoc_info_t *mongoc;   // mongoDB socket handle
+  influx_handle_t influx;
+  mongo_handle_t mongo;
   char app_name[32];  // app name - to be used for tagging data
 };
 typedef struct rscfl_handle_t *rscfl_handle;

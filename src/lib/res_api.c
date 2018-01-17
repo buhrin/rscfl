@@ -59,11 +59,11 @@ DEFINE_REDUCE_FUNCTION(wc, struct timespec)
  * Static function declarations
  */
 
-static CURL *connect_to_influxDB(void);
 static int open_file(char *db_name, char *app_name, char *extension);
 static int open_influxDB_file(char *app_name);
 static int open_mongoDB_file(char *app_name);
-static mongoc_info_t *connect_to_mongoDB(char *app_name);
+static CURL *connect_to_influxDB(void);
+static bool connect_to_mongoDB(char *app_name, mongo_handle_t *mongo);
 static int store_measurements(rscfl_handle rhdl, char *measurements);
 static int store_extra_data(rscfl_handle rhdl, char *json);
 static char *spaces_to_underscores(const char *string);
@@ -119,25 +119,25 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config, cha
   // system("/home/branislavuhrin/RMF/source/InfluxDB_import");
   // system("/home/branislavuhrin/RMF/source/MongoDB_import");
 
-  rhdl->curl = NULL;
-  rhdl->influx_fd = -1;
-  rhdl->mongoc = NULL;
-  rhdl->mongo_fd = -1;
+  rhdl->influx.curl = NULL;
+  rhdl->influx.fd = -1;
+  rhdl->mongo.connected = false;
+  rhdl->mongo.fd = -1;
 
   if (app_name != NULL && strlen(app_name) < 32 && strncpy(rhdl->app_name, app_name, sizeof(rhdl->app_name)) != NULL){
-    rhdl->curl = connect_to_influxDB();
-    if (rhdl->curl == NULL){
+    rhdl->influx.curl = connect_to_influxDB();
+    if (rhdl->influx.curl == NULL){
       printf("Couldn't connect to influxDB, opening a file for writing\n");
-      rhdl->influx_fd = open_influxDB_file(app_name);
+      rhdl->influx.fd = open_influxDB_file(app_name);
     }
-    if (rhdl->curl == NULL && rhdl->influx_fd == -1){
+    if (rhdl->influx.curl == NULL && rhdl->influx.fd == -1){
       fprintf(stderr, "Couldn't connect to influxDB or open a file for writing. Persistent storage is not supported.\n");
     } else if (need_extra_data){
-      rhdl->mongoc = connect_to_mongoDB(app_name);
-      if (rhdl->mongoc == NULL){
+      rhdl->mongo.connected = connect_to_mongoDB(app_name, &rhdl->mongo);
+      if (rhdl->mongo.connected == false){
         printf("Couldn't connect to mongoDB, opening a file for writing\n");
-        rhdl->mongo_fd = open_mongoDB_file(app_name);
-        if (rhdl->mongo_fd == -1){
+        rhdl->mongo.fd = open_mongoDB_file(app_name);
+        if (rhdl->mongo.fd == -1){
           fprintf(stderr, "Couldn't connect to mongoDB or open a file for writing. Storing extra data is not supported.\n");
         }
       }
@@ -211,26 +211,25 @@ error:
 
 void rscfl_cleanup(rscfl_handle rhdl)
 {
-  if (rhdl->curl != NULL){
-    curl_easy_cleanup(rhdl->curl);
+  if (rhdl->influx.curl != NULL){
+    curl_easy_cleanup(rhdl->influx.curl);
     curl_global_cleanup();
-    rhdl->curl = NULL;
+    rhdl->influx.curl = NULL;
   }
-  if (rhdl->influx_fd != -1){
-    close(rhdl->influx_fd);
-    rhdl->influx_fd = -1;
+  if (rhdl->influx.fd != -1){
+    close(rhdl->influx.fd);
+    rhdl->influx.fd = -1;
   }
-  if (rhdl->mongoc != NULL){
-    mongoc_collection_destroy(rhdl->mongoc->collection);
-    mongoc_database_destroy(rhdl->mongoc->database);
-    mongoc_client_destroy(rhdl->mongoc->client);
+  if (rhdl->mongo.connected){
+    mongoc_collection_destroy(rhdl->mongo.collection);
+    mongoc_database_destroy(rhdl->mongo.database);
+    mongoc_client_destroy(rhdl->mongo.client);
     mongoc_cleanup();
-    free(rhdl->mongoc);
-    rhdl->mongoc = NULL;
+    rhdl->mongo.connected = false;
   }
-  if (rhdl->mongo_fd != -1){
-    close(rhdl->mongo_fd);
-    rhdl->mongo_fd = -1;
+  if (rhdl->mongo.fd != -1){
+    close(rhdl->mongo.fd);
+    rhdl->mongo.fd = -1;
   }
 }
 
@@ -647,7 +646,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     fprintf(stderr, "Can't query data since rscfl handle pointer or query pointer is NULL.\n");
     return NULL;
   }
-  if (rhdl->curl != NULL){
+  if (rhdl->influx.curl != NULL){
     int rv;
     char url[64];
     char message[strlen(query) + 3]; // +3 for the 'q=' and the null terminator
@@ -664,31 +663,31 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     }
     str.length = 0;       /* no data at this point */
 
-    if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, url) != CURLE_OK){
+    if (curl_easy_setopt(rhdl->influx.curl, CURLOPT_URL, url) != CURLE_OK){
       fprintf(stderr, "Insufficient heap space, can't initialise URL to query measurements.\n");
       return NULL;
     }
     snprintf(message, strlen(query) + 3, "q=%s", query);
 
-    curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, message);
-    curl_easy_setopt(rhdl->curl, CURLOPT_WRITEFUNCTION, data_read_callback);
-    curl_easy_setopt(rhdl->curl, CURLOPT_WRITEDATA, (void *)&str);
+    curl_easy_setopt(rhdl->influx.curl, CURLOPT_POSTFIELDS, message);
+    curl_easy_setopt(rhdl->influx.curl, CURLOPT_WRITEFUNCTION, data_read_callback);
+    curl_easy_setopt(rhdl->influx.curl, CURLOPT_WRITEDATA, (void *)&str);
 
-    if (rv = curl_easy_perform(rhdl->curl))
+    if (rv = curl_easy_perform(rhdl->influx.curl))
     {
       fprintf(stderr, "Can't query measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
       return NULL;
     }
 
-    rv = curl_easy_getinfo(rhdl->curl, CURLINFO_RESPONSE_CODE, &response_code);
+    rv = curl_easy_getinfo(rhdl->influx.curl, CURLINFO_RESPONSE_CODE, &response_code);
     if (rv == CURLE_OK && response_code != 200)
     {
       fprintf(stderr, "Couldn't query measurements, HTTP response code from InfluxDB: %ld.\n", response_code);
       return NULL;
     }
     /* make it so that responses from following requests go to stdout again */
-    curl_easy_setopt(rhdl->curl, CURLOPT_WRITEFUNCTION, NULL);
-    curl_easy_setopt(rhdl->curl, CURLOPT_WRITEDATA, stdout);
+    curl_easy_setopt(rhdl->influx.curl, CURLOPT_WRITEFUNCTION, NULL);
+    curl_easy_setopt(rhdl->influx.curl, CURLOPT_WRITEDATA, stdout);
     return str.ptr;
   } else {
     fprintf(stderr, "Database not queried because persistent storage is disabled.\n");
@@ -702,7 +701,7 @@ mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options)
     fprintf(stderr, "Can't query extra data since rscfl handle pointer or query pointer is NULL.\n");
     return NULL;
   }
-  if (rhdl->mongoc != NULL){
+  if (rhdl->mongo.connected){
     bson_t *filter;
     bson_t *opts;
     mongoc_cursor_t *cursor;
@@ -722,7 +721,7 @@ mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options)
     } else {
       opts = NULL;
     }
-    cursor = mongoc_collection_find_with_opts(rhdl->mongoc->collection, filter, opts, NULL);
+    cursor = mongoc_collection_find_with_opts(rhdl->mongo.collection, filter, opts, NULL);
     bson_destroy(filter);
     if (opts != NULL) bson_destroy(opts);
     return cursor;
@@ -1039,7 +1038,7 @@ static int open_mongoDB_file(char *app_name)
   return open_file("MongoDB", app_name, "json");
 }
 
-static mongoc_info_t *connect_to_mongoDB(char *app_name)
+static bool connect_to_mongoDB(char *app_name, mongo_handle_t *mongo)
 {
   const char *uri_str = "mongodb://localhost:27017/?appname=rscfl";
   mongoc_client_t *client;
@@ -1048,7 +1047,6 @@ static mongoc_info_t *connect_to_mongoDB(char *app_name)
   bson_t *command, reply;
   bson_error_t error;
   bool retval;
-  mongoc_info_t *info;
 
   mongoc_init();
 
@@ -1063,27 +1061,17 @@ static mongoc_info_t *connect_to_mongoDB(char *app_name)
     fprintf(stderr, "%s\n", error.message);
     mongoc_client_destroy(client);
     mongoc_cleanup();
-    return NULL;
+    return false;
   }
 
   /* Get a handle on the correct database and collection */
   database = mongoc_client_get_database(client, app_name);
   collection = mongoc_client_get_collection(client, app_name, "main_collection");
 
-  info = (mongoc_info_t *) malloc(sizeof(mongoc_info_t));
-  if (info == NULL){
-    perror("Couldn't allocate memory for mongoc_info_t struct.");
-    mongoc_collection_destroy(collection);
-    mongoc_database_destroy(database);
-    mongoc_client_destroy(client);
-    mongoc_cleanup();
-    return NULL;
-  } else {
-    info->client = client;
-    info->collection = collection;
-    info->database = database;
-    return info;
-  }
+  mongo->client = client;
+  mongo->collection = collection;
+  mongo->database = database;
+  return true;
 }
 
 static int store_measurements(rscfl_handle rhdl, char *measurements)
@@ -1092,56 +1080,56 @@ static int store_measurements(rscfl_handle rhdl, char *measurements)
     fprintf(stderr, "Can't store data since rscfl handle pointer or data pointer is NULL.\n");
     return -1;
   }
-  if (rhdl->curl != NULL){
+  if (rhdl->influx.curl != NULL){
     int rv;
     char url[64];
     long response_code;
 
     snprintf(url, 64, "http://localhost:8086/write?db=%s", rhdl->app_name);
 
-    if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, url) != CURLE_OK){
+    if (curl_easy_setopt(rhdl->influx.curl, CURLOPT_URL, url) != CURLE_OK){
       fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
       return -1;
     }
-    curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, measurements);
+    curl_easy_setopt(rhdl->influx.curl, CURLOPT_POSTFIELDS, measurements);
 
-    if (rv = curl_easy_perform(rhdl->curl))
+    if (rv = curl_easy_perform(rhdl->influx.curl))
     {
       fprintf(stderr, "Can't send measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
       return -1;
     }
 
-    rv = curl_easy_getinfo(rhdl->curl, CURLINFO_RESPONSE_CODE, &response_code);
+    rv = curl_easy_getinfo(rhdl->influx.curl, CURLINFO_RESPONSE_CODE, &response_code);
     if (rv == CURLE_OK && response_code == 404)
     {
       /* create database */
-      if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, "http://localhost:8086/query") != CURLE_OK){
+      if (curl_easy_setopt(rhdl->influx.curl, CURLOPT_URL, "http://localhost:8086/query") != CURLE_OK){
         fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
         return -1;
       }
       char message[64];
       snprintf(message, 64, "q=CREATE DATABASE \"%s\"", rhdl->app_name);
-      curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, message);
-      if (rv = curl_easy_perform(rhdl->curl))
+      curl_easy_setopt(rhdl->influx.curl, CURLOPT_POSTFIELDS, message);
+      if (rv = curl_easy_perform(rhdl->influx.curl))
       {
         fprintf(stderr, "Can't create new database - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
         return -1;
       }
 
-      rv = curl_easy_getinfo(rhdl->curl, CURLINFO_RESPONSE_CODE, &response_code);
+      rv = curl_easy_getinfo(rhdl->influx.curl, CURLINFO_RESPONSE_CODE, &response_code);
       if (rv == CURLE_OK && response_code != 200)
       {
         fprintf(stderr, "Couldn't create DB, HTTP response code from InfluxDB: %ld.\n", response_code);
         return -1;
       }
       /* resend message */
-      if (curl_easy_setopt(rhdl->curl, CURLOPT_URL, url) != CURLE_OK){
+      if (curl_easy_setopt(rhdl->influx.curl, CURLOPT_URL, url) != CURLE_OK){
         fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
         return -1;
       }
-      curl_easy_setopt(rhdl->curl, CURLOPT_POSTFIELDS, measurements);
+      curl_easy_setopt(rhdl->influx.curl, CURLOPT_POSTFIELDS, measurements);
 
-      if (rv = curl_easy_perform(rhdl->curl))
+      if (rv = curl_easy_perform(rhdl->influx.curl))
       {
         fprintf(stderr, "Can't send measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
         return -1;
@@ -1153,13 +1141,13 @@ static int store_measurements(rscfl_handle rhdl, char *measurements)
       fprintf(stderr, "Couldn't store measurement, HTTP response code from InfluxDB: %ld.\n", response_code);
       return -1;
     }
-  } else if (rhdl->influx_fd != -1){
+  } else if (rhdl->influx.fd != -1){
     int bytes, written, total;
     total = strlen(measurements);
     written = 0;
     do
     {
-      bytes = write(rhdl->influx_fd, measurements + written, total - written);
+      bytes = write(rhdl->influx.fd, measurements + written, total - written);
       if (bytes < 0)
         perror("ERROR writing message to file");
       if (bytes == 0)
@@ -1179,7 +1167,7 @@ static int store_extra_data(rscfl_handle rhdl, char *json)
     fprintf(stderr, "Can't store extra data since rscfl handle pointer or data pointer is NULL.\n");
     return -1;
   }
-  if (rhdl->mongoc != NULL){
+  if (rhdl->mongo.connected){
     bson_t *insert;
     bson_error_t error;
     insert = bson_new_from_json((const uint8_t *)json, -1, &error);
@@ -1189,18 +1177,18 @@ static int store_extra_data(rscfl_handle rhdl, char *json)
       return -1;
     }
 
-    if (!mongoc_collection_insert(rhdl->mongoc->collection, MONGOC_INSERT_NONE, insert, NULL, &error)){
+    if (!mongoc_collection_insert(rhdl->mongo.collection, MONGOC_INSERT_NONE, insert, NULL, &error)){
       fprintf(stderr, "%s\n", error.message);
     }
     bson_destroy(insert);
 
-  } else if (rhdl->mongo_fd != -1){
+  } else if (rhdl->mongo.fd != -1){
     int bytes, written, total;
     total = strlen(json);
     written = 0;
     do
     {
-      bytes = write(rhdl->mongo_fd, json + written, total - written);
+      bytes = write(rhdl->mongo.fd, json + written, total - written);
       if (bytes < 0)
         perror("ERROR writing message to file");
       if (bytes == 0)
