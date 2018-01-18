@@ -63,6 +63,7 @@
 extern "C" {
 #endif
 
+#include <pthread.h>
 #include "rscfl/costs.h"
 #include "rscfl/res_common.h"
 #include "rscfl/subsys_list.h"
@@ -112,6 +113,7 @@ typedef struct mongo_handle {
   mongoc_collection_t *collection;
   bool connected;
   int fd;
+  pthread_t sender_thread;
   int pipe_read;
   int pipe_write;
 } mongo_handle_t;
@@ -119,6 +121,7 @@ typedef struct mongo_handle {
 typedef struct influx_handle {
   CURL *curl;
   int fd;
+  pthread_t sender_thread;
   int pipe_read;
   int pipe_write;
 } influx_handle_t;
@@ -306,6 +309,10 @@ int rscfl_acct_api(rscfl_handle, rscfl_token *token, interest_flags fl);
 #define rscfl_read_acct_3(handle, acct, token) rscfl_read_acct_api(handle, acct, token)
 int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_token *token);
 
+/*
+ * the subsys_idx_set * then belongs to the function and may be freed at any time.
+ * Do not try to use it after calling this function. If you need it, copy it somewhere beforehand.
+ */
 #define rscfl_store_data(...) CONCAT(rscfl_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_store_data_2(handle, data) rscfl_store_data_api(handle, data, 0)
 #define rscfl_store_data_3(handle, data, measurement_id) rscfl_store_data_api(handle, data, measurement_id)

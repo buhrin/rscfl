@@ -29,28 +29,28 @@ int main(int argc, char** argv) {
 
   rscfl_read_and_store_data(rhdl, "{\"extra_data\":\"yes\"}");
 
-  err = rscfl_acct(rhdl);
-  if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
-  fclose(fp);
-//  rscfl_read_and_store_data(rhdl);
+  // err = rscfl_acct(rhdl);
+  // if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
+  // fclose(fp);
+  // rscfl_read_and_store_data(rhdl);
 
   /*
    * Querying database
    */
-  // char *string1 = rscfl_query_measurements(rhdl, "select * from \"cpu.cycles\"");
-  // if (string1){
-  //   printf("InfluxDB:\nselect * from \"cpu.cycles\"\n%s\n", string1);
-  //   free(string1);
-  // }
-  // mongoc_cursor_t *cursor = query_extra_data(rhdl, "{}", NULL);
-  // char *string2;
-  // printf("MongoDB:\n");
-  // while (rscfl_get_next_json(cursor, &string2)){
-  //   printf("Document from MongoDB:\n%s\n", string2);
-  //   bson_free(string2);
-  // }
-  // mongoc_cursor_destroy(cursor);
-
+  sleep(2); // sleep on main thread to give other threads the chance to do their work
+  char *string1 = rscfl_query_measurements(rhdl, "select * from \"cpu.cycles\"");
+  if (string1){
+    printf("InfluxDB:\nselect * from \"cpu.cycles\"\n%s\n", string1);
+    free(string1);
+  }
+  mongoc_cursor_t *cursor = query_extra_data(rhdl, "{}", NULL);
+  char *string2;
+  printf("MongoDB:\n");
+  while (rscfl_get_next_json(cursor, &string2)){
+    printf("Document from MongoDB:\n%s\n", string2);
+    bson_free(string2);
+  }
+  mongoc_cursor_destroy(cursor);
   rscfl_cleanup(rhdl);
   return 0;
 }

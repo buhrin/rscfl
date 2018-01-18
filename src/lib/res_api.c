@@ -69,10 +69,17 @@ static int store_extra_data(rscfl_handle rhdl, char *json);
 static char *spaces_to_underscores(const char *string);
 static unsigned long long generate_id(void);
 static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void *userp);
+static void *influxDB_sender(void *param);
+static void *mongoDB_sender(void *param);
 
 struct String{
   char *ptr;
   size_t length;
+};
+
+struct influxDB_data{
+  subsys_idx_set *data;
+  unsigned long long measurement_id;
 };
 
 // define subsystem name array for user-space includes of subsys_list.h
@@ -118,31 +125,104 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config, cha
   /* Import data from any existing files to the databases */
   // system("/home/branislavuhrin/RMF/source/InfluxDB_import");
   // system("/home/branislavuhrin/RMF/source/MongoDB_import");
-
+  int err;
   rhdl->influx.curl = NULL;
   rhdl->influx.fd = -1;
+  rhdl->influx.pipe_read = -1;
+  rhdl->influx.pipe_write = -1;
+
   rhdl->mongo.connected = false;
   rhdl->mongo.fd = -1;
+  rhdl->mongo.pipe_read = -1;
+  rhdl->mongo.pipe_write = -1;
 
   if (app_name != NULL && strlen(app_name) < 32 && strncpy(rhdl->app_name, app_name, sizeof(rhdl->app_name)) != NULL){
+    // app_name is ok, we can try to connect to InfluxDB
     rhdl->influx.curl = connect_to_influxDB();
     if (rhdl->influx.curl == NULL){
+      // we coudln't connect to the database, let's try to open a file for writing the data instead
       printf("Couldn't connect to influxDB, opening a file for writing\n");
       rhdl->influx.fd = open_influxDB_file(app_name);
     }
     if (rhdl->influx.curl == NULL && rhdl->influx.fd == -1){
+      // if we couldn't connect or open a file then print an error and move on.
+      memset(rhdl->app_name, 0, 32);
       fprintf(stderr, "Couldn't connect to influxDB or open a file for writing. Persistent storage is not supported.\n");
-    } else if (need_extra_data){
-      rhdl->mongo.connected = connect_to_mongoDB(app_name, &rhdl->mongo);
-      if (rhdl->mongo.connected == false){
-        printf("Couldn't connect to mongoDB, opening a file for writing\n");
-        rhdl->mongo.fd = open_mongoDB_file(app_name);
-        if (rhdl->mongo.fd == -1){
+    } else {
+      // influxDB storage has been initialised, start influxDB_sender thread
+      err = pthread_create(&rhdl->influx.sender_thread, NULL, influxDB_sender, rhdl);
+      if (err == 0){
+        // the thread was successfully created, we can open a pipe to it.
+        int pipefd[2];
+        err = pipe(pipefd);
+        if (err == 0){
+          // the pipe was successfully opened, store the fd's in rhdl
+          rhdl->influx.pipe_read = pipefd[0];
+          rhdl->influx.pipe_write = pipefd[1];
+        } else {
+          // pipe failed to open, join thread
+          pthread_join(rhdl->influx.sender_thread, NULL);
+        }
+      }
+      if (err){
+        // pipe failed to open or thread failed to start, cleanup
+        memset(rhdl->app_name, 0, 32);
+        if (rhdl->influx.curl != NULL){
+          curl_easy_cleanup(rhdl->influx.curl);
+          rhdl->influx.curl = NULL;
+        }
+        if (rhdl->influx.fd != -1){
+          close(rhdl->influx.fd);
+          rhdl->influx.fd = -1;
+        }
+        fprintf(stderr, "InfluxDB thread or pipe failed to initialise. Persistent storage is not supported.\n");
+      } else if (need_extra_data){
+        // InfluxDB is fully initialised, we can start initialising mongoDB
+        rhdl->mongo.connected = connect_to_mongoDB(app_name, &rhdl->mongo);
+        if (rhdl->mongo.connected == 0){
+          // we coudln't connect to the database, let's try to open a file for writing the data instead
+          printf("Couldn't connect to mongoDB, opening a file for writing\n");
+          rhdl->mongo.fd = open_mongoDB_file(app_name);
+        }
+        if (rhdl->mongo.connected == 0 && rhdl->mongo.fd == -1){
+          // if we couldn't connect or open a file then print an error and move on.
           fprintf(stderr, "Couldn't connect to mongoDB or open a file for writing. Storing extra data is not supported.\n");
+        } else {
+          // mongoDB storage has been initialised, start mongoDB_sender thread
+          err = pthread_create(&rhdl->mongo.sender_thread, NULL, mongoDB_sender, rhdl);
+          if (err == 0){
+            // the thread was successfully created, we can open a pipe to it.
+            int pipefd[2];
+            err = pipe(pipefd);
+            if (err == 0){
+              // the pipe was successfully opened, store the fd's in rhdl
+              rhdl->mongo.pipe_read = pipefd[0];
+              rhdl->mongo.pipe_write = pipefd[1];
+            } else {
+              // pipe failed to open, join thread
+              pthread_join(rhdl->mongo.sender_thread, NULL);
+            }
+          }
+          if (err){
+            // pipe failed to open or thread failed to start, cleanup
+            if (rhdl->mongo.connected){
+              mongoc_collection_destroy(rhdl->mongo.collection);
+              mongoc_database_destroy(rhdl->mongo.database);
+              mongoc_client_destroy(rhdl->mongo.client);
+              mongoc_cleanup();
+              rhdl->mongo.connected = 0;
+            }
+            if (rhdl->mongo.fd != -1){
+              close(rhdl->mongo.fd);
+              rhdl->mongo.fd = -1;
+            }
+            fprintf(stderr, "MongoDB thread or pipe failed to initialise. Storing extra data is not supported.\n");
+          }
         }
       }
     }
   } else {
+    // if app_name is too long or can't be copied.
     memset(rhdl->app_name, 0, 32);
     printf("Persistent storage is disabled.\n");
   }
@@ -211,6 +291,26 @@ error:
 
 void rscfl_cleanup(rscfl_handle rhdl)
 {
+  if (rhdl->influx.pipe_write != -1){
+    close(rhdl->influx.pipe_write);
+    rhdl->influx.pipe_write = -1;
+    // if the pipe has been initialised it means that it is safe
+    // to join the thread because we only initialise pipes after
+    // a thread successfully starts
+    if(pthread_join(rhdl->influx.sender_thread, NULL)) {
+      fprintf(stderr, "Error joining thread\n");
+    }
+  }
+  if (rhdl->mongo.pipe_write != -1){
+    close(rhdl->mongo.pipe_write);
+    rhdl->mongo.pipe_write = -1;
+    // if the pipe has been initialised it means that it is safe
+    // to join the thread because we only initialise pipes after
+    // a thread successfully starts
+    if(pthread_join(rhdl->mongo.sender_thread, NULL)) {
+      fprintf(stderr, "Error joining thread\n");
+    }
+  }
   if (rhdl->influx.curl != NULL){
     curl_easy_cleanup(rhdl->influx.curl);
     curl_global_cleanup();
@@ -558,50 +658,21 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long 
     fprintf(stderr, "Can't store data since data pointer is null.\n");
     return -1;
   }
-  char *empty_metric;
-  if (measurement_id != 0){
-    empty_metric = "%s,subsystem=%s,measurement_id=%llu value=%d\n";
-  } else {
-    empty_metric = "%s,subsystem=%s value=%d\n";
-  }
-  char metric[METRIC_BUFFER_SIZE] = {0};
-  char subsystem_metrics[SUBSYSTEM_METRICS_BUFFER_SIZE] = {0};
-  char measurements[MEASUREMENTS_BUFFER_SIZE] = {0};
-  int measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
-
-  int i, err;
-  printf("data->set_size:%d\n",data->set_size);
-  for(i = 0; i < data->set_size; i++){
-    short subsys_id = data->ids[i];
-    char *subsystem_name = spaces_to_underscores(rscfl_subsys_name[subsys_id]);
-    printf("subsystem_name:%s\n",subsystem_name);
-
-    struct subsys_accounting sa_id = data->set[i];
-
-    EXTRACT_METRIC(cpu.cycles, measurement_id)
-    EXTRACT_METRIC(cpu.wall_clock_time, measurement_id)
-    EXTRACT_METRIC(sched.cycles_out_local, measurement_id)
-    EXTRACT_METRIC(sched.wct_out_local, measurement_id)
-
-    printf("subsystem_metrics:%s\n",subsystem_metrics);
-
-    if(strlen(subsystem_metrics) > measurements_remaining_length){
-      err = store_measurements(rhdl, measurements);
-      if (err) return err;
-      printf("sent:%s\n",measurements);
-      memset(measurements, 0, MEASUREMENTS_BUFFER_SIZE);
-      measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
+  struct influxDB_data buffer;
+  int bytes, sent, total;
+  buffer.data = data;
+  buffer.measurement_id = measurement_id;
+  total = sizeof(struct influxDB_data);
+  sent = 0;
+  do
+  {
+    bytes = write(rhdl->influx.pipe_write, &buffer + sent, total - sent);
+    if (bytes < 0){
+      perror("ERROR writing measurements to pipe.");
+      return -1;
     }
-
-    strncat(measurements, subsystem_metrics, measurements_remaining_length);
-    measurements_remaining_length -= strlen(subsystem_metrics);
-    memset(subsystem_metrics, 0, SUBSYSTEM_METRICS_BUFFER_SIZE);
-    free(subsystem_name);
-  }
-  err = store_measurements(rhdl, measurements);
-  if (err) return err;
-  printf("sent:%s\n",measurements);
-
+    sent += bytes;
+  } while (sent < total);
   return 0;
 }
 
@@ -619,7 +690,6 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
     } else {
       err = rscfl_store_data(rhdl, data);
     }
-    free_subsys_idx_set(data);
     if(err) fprintf(stderr, "Error accounting for system call [data store into DB]\n");
   }
   return err;
@@ -627,16 +697,27 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
 
 int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, char *info_json)
 {
-  int err;
+  int err, bytes, sent, total;
   unsigned long long id = generate_id();
   err = rscfl_store_data(rhdl, data, id);
   if (err) return err;
 
   char *extra_data_unformatted = "{\"measurement_id\":%llu,\"data\":%s}";
-  char extra_data[strlen(info_json) + 64];
+  char *extra_data = (char *)malloc(strlen(info_json) + 64);
   snprintf(extra_data, strlen(info_json) + 64, extra_data_unformatted, id, info_json);
 
-  err = store_extra_data(rhdl, extra_data);
+  total = sizeof(char *);
+  sent = 0;
+  do
+  {
+    bytes = write(rhdl->mongo.pipe_write, &extra_data + sent, total - sent);
+    if (bytes < 0){
+      perror("ERROR writing measurements to pipe.");
+      return -1;
+    }
+    sent += bytes;
+  } while (sent < total);
+
   return err;
 }
 
@@ -680,7 +761,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     }
 
     rv = curl_easy_getinfo(rhdl->influx.curl, CURLINFO_RESPONSE_CODE, &response_code);
-    if (rv == CURLE_OK && response_code != 200)
+    if (rv == CURLE_OK && response_code != 200 && response_code != 204)
     {
       fprintf(stderr, "Couldn't query measurements, HTTP response code from InfluxDB: %ld.\n", response_code);
       return NULL;
@@ -726,8 +807,8 @@ mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options)
     if (opts != NULL) bson_destroy(opts);
     return cursor;
   } else {
-    fprintf(stderr, "Extra data can't be queried either because persistent storage is"
-                    "disabled completely or because need_extra_data was false"
+    fprintf(stderr, "Extra data can't be queried either because persistent storage is "
+                    "disabled completely or because need_extra_data was false "
                     "when calling rscfl_init.\n");
     return NULL;
   }
@@ -1027,7 +1108,7 @@ static CURL *connect_to_influxDB(void)
   }
   return curl;
 error:
-  fprintf(stderr, "libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+  fprintf(stderr, "Can't initialise connection to InfluxDB - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
   curl_easy_cleanup(curl);
   curl_global_cleanup();
   return NULL;
@@ -1117,7 +1198,7 @@ static int store_measurements(rscfl_handle rhdl, char *measurements)
       }
 
       rv = curl_easy_getinfo(rhdl->influx.curl, CURLINFO_RESPONSE_CODE, &response_code);
-      if (rv == CURLE_OK && response_code != 200)
+      if (rv == CURLE_OK && response_code != 200 && response_code != 204)
       {
         fprintf(stderr, "Couldn't create DB, HTTP response code from InfluxDB: %ld.\n", response_code);
         return -1;
@@ -1136,7 +1217,7 @@ static int store_measurements(rscfl_handle rhdl, char *measurements)
       }
     }
 
-    if (rv == CURLE_OK && response_code != 200)
+    if (rv == CURLE_OK && response_code != 200 && response_code != 204)
     {
       fprintf(stderr, "Couldn't store measurement, HTTP response code from InfluxDB: %ld.\n", response_code);
       return -1;
@@ -1196,8 +1277,8 @@ static int store_extra_data(rscfl_handle rhdl, char *json)
       written += bytes;
     } while (written < total);
   } else {
-    fprintf(stderr, "Extra data not stored either because persistent storage is"
-                    "disabled completely or because need_extra_data was false"
+    fprintf(stderr, "Extra data not stored either because persistent storage is "
+                    "disabled completely or because need_extra_data was false "
                     "when calling rscfl_init.\n");
     return -1;
   }
@@ -1250,4 +1331,114 @@ static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void
   str->ptr[str->length] = 0;
 
   return realsize;
+}
+
+static void *influxDB_sender(void *param)
+{
+  rscfl_handle rhdl = (rscfl_handle) param;
+  while (rhdl->influx.pipe_read == -1){
+    // the main thread hasn't initialised the pipe yet, so wait for it
+    sleep(1);
+  }
+
+  struct influxDB_data buffer;
+  unsigned long long measurement_id;
+  subsys_idx_set *data;
+  int bytes, total = sizeof(struct influxDB_data), received = 0;
+  while((bytes = read(rhdl->influx.pipe_read, &buffer + received, total - received)) > 0) {
+    received += bytes;
+    if (received == total){
+      received = 0;
+      data = buffer.data;
+      measurement_id = buffer.measurement_id;
+
+      char *empty_metric;
+      if (measurement_id != 0){
+        empty_metric = "%s,subsystem=%s,measurement_id=%llu value=%d\n";
+      } else {
+        empty_metric = "%s,subsystem=%s value=%d\n";
+      }
+      char metric[METRIC_BUFFER_SIZE] = {0};
+      char subsystem_metrics[SUBSYSTEM_METRICS_BUFFER_SIZE] = {0};
+      char measurements[MEASUREMENTS_BUFFER_SIZE] = {0};
+      int measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
+
+      int i, err;
+      printf("data->set_size:%d\n",data->set_size);
+      for(i = 0; i < data->set_size; i++){
+        short subsys_id = data->ids[i];
+        char *subsystem_name = spaces_to_underscores(rscfl_subsys_name[subsys_id]);
+        printf("subsystem_name:%s\n",subsystem_name);
+
+        struct subsys_accounting sa_id = data->set[i];
+
+        EXTRACT_METRIC(cpu.cycles, measurement_id)
+        EXTRACT_METRIC(cpu.wall_clock_time, measurement_id)
+        EXTRACT_METRIC(sched.cycles_out_local, measurement_id)
+        EXTRACT_METRIC(sched.wct_out_local, measurement_id)
+
+        printf("subsystem_metrics:%s\n",subsystem_metrics);
+
+        if(strlen(subsystem_metrics) > measurements_remaining_length){
+          err = store_measurements(rhdl, measurements);
+          if (err) goto cleanup;
+          printf("sent:%s\n",measurements);
+          memset(measurements, 0, MEASUREMENTS_BUFFER_SIZE);
+          measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
+        }
+
+        strncat(measurements, subsystem_metrics, measurements_remaining_length);
+        measurements_remaining_length -= strlen(subsystem_metrics);
+        memset(subsystem_metrics, 0, SUBSYSTEM_METRICS_BUFFER_SIZE);
+        free(subsystem_name);
+      }
+      err = store_measurements(rhdl, measurements);
+      if (err) goto cleanup;
+      printf("sent:%s\n",measurements);
+      free_subsys_idx_set(data);
+    }
+  }
+  if (bytes == 0){
+    printf("Pipe was closed, ready to exit from influxDB sender thread.\n");
+  } else {
+    perror("Error occured when trying to read from pipe on influxDB sender thread.");
+    // this needs to be handled properly (the main thread needs to be notified)
+  }
+
+cleanup:
+  printf("Exiting from influxDB sender thread.\n");
+  close(rhdl->influx.pipe_read);
+  rhdl->influx.pipe_read = -1;
+  return NULL;
+}
+
+static void *mongoDB_sender(void *param)
+{
+  rscfl_handle rhdl = (rscfl_handle) param;
+  while (rhdl->mongo.pipe_read == -1){
+    // the main thread hasn't initialised the pipe yet, so wait for it
+    sleep(1);
+  }
+  char *str;
+  int err, bytes, total = sizeof(char *), received = 0;
+  while((bytes = read(rhdl->mongo.pipe_read, &str + received, total - received)) > 0) {
+    received += bytes;
+    if (received == total){
+      received == 0;
+      err = store_extra_data(rhdl, str);
+      free(str);
+      if (err) break;
+    }
+  }
+  if (bytes == 0){
+    printf("Pipe was closed, ready to exit from mongoDB sender thread.\n");
+  } else if (err){
+    fprintf(stderr, "Error sending data to MongoDB");
+  } else {
+    perror("Error occured when trying to read from pipe on mongoDB sender thread.");
+    // this needs to be handled properly (the main thread needs to be notified)
+  }
+  close(rhdl->mongo.pipe_read);
+  rhdl->mongo.pipe_read = -1;
+  return NULL;
 }
