@@ -114,6 +114,7 @@ typedef struct mongo_handle {
   bool connected;
   int fd;
   pthread_t sender_thread;
+  volatile bool thread_alive;
   int pipe_read;
   int pipe_write;
 } mongo_handle_t;
@@ -122,6 +123,7 @@ typedef struct influx_handle {
   CURL *curl;
   int fd;
   pthread_t sender_thread;
+  volatile bool thread_alive;
   int pipe_read;
   int pipe_write;
 } influx_handle_t;
@@ -254,7 +256,12 @@ typedef struct subsys_idx_set subsys_idx_set;
  */
 rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config, char *app_name, bool need_extra_data);
 
-void rscfl_cleanup(rscfl_handle rhdl);
+/*
+ * Call at the end of your program to free up all resources associated with
+ * persistent storage. Not necessary if rscfl_init was called without the
+ * app_name argument.
+ */
+void rscfl_persistent_storage_cleanup(rscfl_handle rhdl);
 
 #define rscfl_get_handle(...) CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_get_handle_0() rscfl_get_handle_api(NULL)

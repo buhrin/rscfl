@@ -53,6 +53,6 @@ int main(int argc, char** argv) {
     }
     mongoc_cursor_destroy(cursor);
   }
-  rscfl_cleanup(rhdl);
+  rscfl_persistent_storage_cleanup(rhdl);
   return 0;
 }
