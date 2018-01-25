@@ -44,13 +44,15 @@ int main(int argc, char** argv) {
     free(string1);
   }
   mongoc_cursor_t *cursor = query_extra_data(rhdl, "{}", NULL);
-  char *string2;
-  printf("MongoDB:\n");
-  while (rscfl_get_next_json(cursor, &string2)){
-    printf("Document from MongoDB:\n%s\n", string2);
-    bson_free(string2);
+  if (cursor != NULL){
+    char *string2;
+    printf("MongoDB:\n");
+    while (rscfl_get_next_json(cursor, &string2)){
+      printf("Document from MongoDB:\n%s\n", string2);
+      bson_free(string2);
+    }
+    mongoc_cursor_destroy(cursor);
   }
-  mongoc_cursor_destroy(cursor);
   rscfl_cleanup(rhdl);
   return 0;
 }

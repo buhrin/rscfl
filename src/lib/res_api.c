@@ -42,13 +42,10 @@
 // macro function definitions
 DEFINE_REDUCE_FUNCTION(rint, ru64)
 DEFINE_REDUCE_FUNCTION(wc, struct timespec)
-#define EXTRACT_METRIC(metric_name, measurement_id)                                                           \
-  if (measurement_id != 0){                                                                                   \
-    snprintf(metric, 256, empty_metric, #metric_name, subsystem_name, measurement_id, sa_id.metric_name);     \
-  } else {                                                                                                    \
-    snprintf(metric, 256, empty_metric, #metric_name, subsystem_name, sa_id.metric_name);                     \
-  }                                                                                                           \
-  strncat(subsystem_metrics, metric, 256);                                                                    \
+#define EXTRACT_METRIC(metric_name, metric_value, modifier)                           \
+  snprintf(metric, METRIC_BUFFER_SIZE, "%s,subsystem=%s value=" modifier " %llu\n",   \
+           metric_name, subsystem_name, metric_value, timestamp);                     \
+  strncat(subsystem_metrics, metric, METRIC_BUFFER_SIZE);                             \
   memset(metric, 0, METRIC_BUFFER_SIZE);
 
 #define METRIC_BUFFER_SIZE             256
@@ -66,8 +63,8 @@ static CURL *connect_to_influxDB(void);
 static bool connect_to_mongoDB(char *app_name, mongo_handle_t *mongo);
 static int store_measurements(rscfl_handle rhdl, char *measurements);
 static int store_extra_data(rscfl_handle rhdl, char *json);
-static char *spaces_to_underscores(const char *string);
-static unsigned long long generate_id(void);
+static char *escape_spaces(const char *string);
+static unsigned long long get_timestamp(void);
 static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void *userp);
 static void *influxDB_sender(void *param);
 static void *mongoDB_sender(void *param);
@@ -79,7 +76,7 @@ struct String{
 
 struct influxDB_data{
   subsys_idx_set *data;
-  unsigned long long measurement_id;
+  unsigned long long timestamp;
 };
 
 // define subsystem name array for user-space includes of subsys_list.h
@@ -652,7 +649,7 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   return -EINVAL;
 }
 
-int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long measurement_id)
+int rscfl_store_data(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp)
 {
   if (data == NULL){
     fprintf(stderr, "Can't store data since data pointer is null.\n");
@@ -661,7 +658,7 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long 
   struct influxDB_data buffer;
   int bytes, sent, total;
   buffer.data = data;
-  buffer.measurement_id = measurement_id;
+  buffer.timestamp = timestamp;
   total = sizeof(struct influxDB_data);
   sent = 0;
   do
@@ -688,7 +685,8 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
     if (info_json != NULL){
       err = rscfl_store_data_with_extra_info(rhdl, data, info_json);
     } else {
-      err = rscfl_store_data(rhdl, data);
+      unsigned long long timestamp = get_timestamp();
+      err = rscfl_store_data(rhdl, data, timestamp);
     }
     if(err) fprintf(stderr, "Error accounting for system call [data store into DB]\n");
   }
@@ -698,13 +696,13 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
 int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, char *info_json)
 {
   int err, bytes, sent, total;
-  unsigned long long id = generate_id();
-  err = rscfl_store_data(rhdl, data, id);
+  unsigned long long timestamp = get_timestamp();
+  err = rscfl_store_data(rhdl, data, timestamp);
   if (err) return err;
 
-  char *extra_data_unformatted = "{\"measurement_id\":%llu,\"data\":%s}";
+  char *extra_data_unformatted = "{\"timestamp\":%llu,\"data\":%s}";
   char *extra_data = (char *)malloc(strlen(info_json) + 64);
-  snprintf(extra_data, strlen(info_json) + 64, extra_data_unformatted, id, info_json);
+  snprintf(extra_data, strlen(info_json) + 64, extra_data_unformatted, timestamp, info_json);
 
   total = sizeof(char *);
   sent = 0;
@@ -1166,7 +1164,7 @@ static int store_measurements(rscfl_handle rhdl, char *measurements)
     char url[64];
     long response_code;
 
-    snprintf(url, 64, "http://localhost:8086/write?db=%s", rhdl->app_name);
+    snprintf(url, 64, "http://localhost:8086/write?db=%s&precision=u", rhdl->app_name);
 
     if (curl_easy_setopt(rhdl->influx.curl, CURLOPT_URL, url) != CURLE_OK){
       fprintf(stderr, "Insufficient heap space, can't initialise URL to send measurements.\n");
@@ -1285,14 +1283,18 @@ static int store_extra_data(rscfl_handle rhdl, char *json)
   return 0;
 }
 
-static char *spaces_to_underscores(const char *string)
+static char *escape_spaces(const char *string)
 {
-  char *new_string = malloc(sizeof(char) * (strlen(string) + 1));
+  if (string == NULL)
+    return NULL;
+  char *new_string = malloc(2 * sizeof(char) * (strlen(string) + 1));
   char *new_string_iterator = new_string;
   for (; *string; ++string, ++new_string_iterator)
   {
     if (*string == ' '){
-      *new_string_iterator = '_';
+      *new_string_iterator = '\\';
+      ++new_string_iterator;
+      *new_string_iterator = ' ';
     } else {
       *new_string_iterator = *string;
     }
@@ -1301,17 +1303,11 @@ static char *spaces_to_underscores(const char *string)
   return new_string;
 }
 
-static unsigned long long generate_id(void)
+static unsigned long long get_timestamp(void)
 {
   struct timeval tv;
-  gettimeofday(&tv, NULL);
-  unsigned long long millisecondsSinceEpoch =
-      (unsigned long long)(tv.tv_sec) * 1000 +
-      (unsigned long long)(tv.tv_usec) / 1000;
-  /* id returned is the number of milliseconds since 01/01/2018 00:00:00.
-     It's guaranteed to be unique per measurement, but it's much shorter than
-     millisecondsSinceEpoch and so it's nicer to look at. */
-  return (millisecondsSinceEpoch - 1514764800000);
+  gettimeofday(&tv,NULL);
+  return tv.tv_sec*(unsigned long long)1000000+tv.tv_usec;
 }
 
 static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void *userp)
@@ -1342,7 +1338,7 @@ static void *influxDB_sender(void *param)
   }
 
   struct influxDB_data buffer;
-  unsigned long long measurement_id;
+  unsigned long long timestamp;
   subsys_idx_set *data;
   int bytes, total = sizeof(struct influxDB_data), received = 0;
   while((bytes = read(rhdl->influx.pipe_read, &buffer + received, total - received)) > 0) {
@@ -1350,32 +1346,32 @@ static void *influxDB_sender(void *param)
     if (received == total){
       received = 0;
       data = buffer.data;
-      measurement_id = buffer.measurement_id;
+      timestamp = buffer.timestamp;
 
-      char *empty_metric;
-      if (measurement_id != 0){
-        empty_metric = "%s,subsystem=%s,measurement_id=%llu value=%d\n";
-      } else {
-        empty_metric = "%s,subsystem=%s value=%d\n";
-      }
       char metric[METRIC_BUFFER_SIZE] = {0};
       char subsystem_metrics[SUBSYSTEM_METRICS_BUFFER_SIZE] = {0};
       char measurements[MEASUREMENTS_BUFFER_SIZE] = {0};
       int measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
 
       int i, err;
-      printf("data->set_size:%d\n",data->set_size);
+      long long wct;
       for(i = 0; i < data->set_size; i++){
         short subsys_id = data->ids[i];
-        char *subsystem_name = spaces_to_underscores(rscfl_subsys_name[subsys_id]);
-        printf("subsystem_name:%s\n",subsystem_name);
+        char *subsystem_name = escape_spaces(rscfl_subsys_name[subsys_id]);
 
         struct subsys_accounting sa_id = data->set[i];
 
-        EXTRACT_METRIC(cpu.cycles, measurement_id)
-        EXTRACT_METRIC(cpu.wall_clock_time, measurement_id)
-        EXTRACT_METRIC(sched.cycles_out_local, measurement_id)
-        EXTRACT_METRIC(sched.wct_out_local, measurement_id)
+        EXTRACT_METRIC("cpu.cycles", sa_id.cpu.cycles, "%llu")
+
+        wct = (long long)sa_id.cpu.wall_clock_time.tv_sec*1000000000 + (long long)sa_id.cpu.wall_clock_time.tv_nsec;
+        printf("a: %lld, b: %lld, c: %lld\n",(long long)sa_id.cpu.wall_clock_time.tv_sec, (long long)sa_id.cpu.wall_clock_time.tv_nsec, wct);
+        EXTRACT_METRIC("cpu.wall_clock_time", wct, "%lld")
+
+        EXTRACT_METRIC("sched.cycles_out_local", sa_id.sched.cycles_out_local, "%llu")
+
+        wct = (long long)sa_id.sched.wct_out_local.tv_sec*1000000000 + (long long)sa_id.sched.wct_out_local.tv_nsec;
+        printf("a: %lld, b: %lld, c: %lld\n",(long long)sa_id.sched.wct_out_local.tv_sec, (long long)sa_id.sched.wct_out_local.tv_nsec, wct);
+        EXTRACT_METRIC("sched.wct_out_local", wct, "%lld")
 
         printf("subsystem_metrics:%s\n",subsystem_metrics);
 
