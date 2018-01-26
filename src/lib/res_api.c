@@ -148,22 +148,25 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config, cha
       memset(rhdl->app_name, 0, 32);
       fprintf(stderr, "Couldn't connect to influxDB or open a file for writing. Persistent storage is not supported.\n");
     } else {
-      // influxDB storage has been initialised, start influxDB_sender thread
-      pthread_t influx_thread;
-      err = pthread_create(&influx_thread, NULL, influxDB_sender, rhdl);
+      // influxDB storage has been initialised, start influxDB_sender thread. First, open a pipe
+      int influx_pipe[2];
+      err = pipe(influx_pipe);
       if (err == 0){
-        // the thread was successfully created, we can open a pipe to it.
-        rhdl->influx.sender_thread = influx_thread;
-        rhdl->influx.thread_alive = true;
-        int pipefd[2];
-        err = pipe(pipefd);
+        // the pipe was successfully opened, store the fd's in rhdl and start the thread
+        rhdl->influx.pipe_read = influx_pipe[0];
+        rhdl->influx.pipe_write = influx_pipe[1];
+        pthread_t influx_thread;
+        err = pthread_create(&influx_thread, NULL, influxDB_sender, rhdl);
         if (err == 0){
-          // the pipe was successfully opened, store the fd's in rhdl
-          rhdl->influx.pipe_read = pipefd[0];
-          rhdl->influx.pipe_write = pipefd[1];
+          // the thread was successfully created, store that in rhdl
+          rhdl->influx.sender_thread = influx_thread;
+          rhdl->influx.thread_alive = true;
         } else {
-          // pipe failed to open, join thread
-          pthread_join(rhdl->influx.sender_thread, NULL);
+          // thread failed to start, close pipe.
+          close(rhdl->influx.pipe_read);
+          rhdl->influx.pipe_read = -1;
+          close(rhdl->influx.pipe_write);
+          rhdl->influx.pipe_write = -1;
         }
       }
       if (err){
@@ -184,22 +187,25 @@ rscfl_handle rscfl_init_api(rscfl_version_t rscfl_ver, rscfl_config* config, cha
           // if we couldn't connect or open a file then print an error and move on.
           fprintf(stderr, "Couldn't connect to mongoDB or open a file for writing. Storing extra data is not supported.\n");
         } else {
-          // mongoDB storage has been initialised, start mongoDB_sender thread
-          pthread_t mongo_thread;
-          err = pthread_create(&mongo_thread, NULL, mongoDB_sender, rhdl);
+          // mongoDB storage has been initialised, start mongoDB_sender thread. First, open a pipe
+          int mongo_pipe[2];
+          err = pipe(mongo_pipe);
           if (err == 0){
-            // the thread was successfully created, we can open a pipe to it.
-            rhdl->mongo.sender_thread = mongo_thread;
-            rhdl->mongo.thread_alive = true;
-            int pipefd[2];
-            err = pipe(pipefd);
+            // the pipe was successfully opened, store the fd's in rhdl and start the thread
+            rhdl->mongo.pipe_read = mongo_pipe[0];
+            rhdl->mongo.pipe_write = mongo_pipe[1];
+            pthread_t mongo_thread;
+            err = pthread_create(&mongo_thread, NULL, mongoDB_sender, rhdl);
             if (err == 0){
-              // the pipe was successfully opened, store the fd's in rhdl
-              rhdl->mongo.pipe_read = pipefd[0];
-              rhdl->mongo.pipe_write = pipefd[1];
+              // the thread was successfully created, store that in rhdl
+              rhdl->mongo.sender_thread = mongo_thread;
+              rhdl->mongo.thread_alive = true;
             } else {
-              // pipe failed to open, join thread
-              pthread_join(rhdl->mongo.sender_thread, NULL);
+              // thread failed to start, close pipe.
+              close(rhdl->mongo.pipe_read);
+              rhdl->mongo.pipe_read = -1;
+              close(rhdl->mongo.pipe_write);
+              rhdl->mongo.pipe_write = -1;
             }
           }
           if (err){
@@ -1373,10 +1379,6 @@ static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void
 static void *influxDB_sender(void *param)
 {
   rscfl_handle rhdl = (rscfl_handle) param;
-  while (rhdl->influx.pipe_read == -1){
-    // the main thread hasn't initialised the pipe yet, so wait for it
-    sleep(1);
-  }
 
   struct influxDB_data buffer;
   unsigned long long timestamp;
@@ -1456,10 +1458,6 @@ exit:
 static void *mongoDB_sender(void *param)
 {
   rscfl_handle rhdl = (rscfl_handle) param;
-  while (rhdl->mongo.pipe_read == -1){
-    // the main thread hasn't initialised the pipe yet, so wait for it
-    sleep(1);
-  }
   char *str;
   int err, bytes, total = sizeof(char *), received = 0;
   while((bytes = read(rhdl->mongo.pipe_read, &str + received, total - received)) > 0) {
@@ -1487,9 +1485,6 @@ static void influxDB_cleanup(rscfl_handle rhdl)
   if (rhdl->influx.pipe_write != -1){
     close(rhdl->influx.pipe_write);
     rhdl->influx.pipe_write = -1;
-    // if the pipe has been initialised it means that it is safe
-    // to join the thread because we only initialise pipes after
-    // a thread successfully starts
     if(pthread_join(rhdl->influx.sender_thread, NULL)) {
       fprintf(stderr, "Error joining thread\n");
     }
@@ -1512,9 +1507,6 @@ static void mongoDB_cleanup(rscfl_handle rhdl)
   if (rhdl->mongo.pipe_write != -1){
     close(rhdl->mongo.pipe_write);
     rhdl->mongo.pipe_write = -1;
-    // if the pipe has been initialised it means that it is safe
-    // to join the thread because we only initialise pipes after
-    // a thread successfully starts
     if(pthread_join(rhdl->mongo.sender_thread, NULL)) {
       fprintf(stderr, "Error joining thread\n");
     }
