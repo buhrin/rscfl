@@ -27,6 +27,7 @@
 #include "rscfl/config.h"
 #include "rscfl/costs.h"
 #include "rscfl/res_common.h"
+#include "rscfl/cJSON.h"
 
 
 #define max(a,b)                                \
@@ -51,6 +52,7 @@ DEFINE_REDUCE_FUNCTION(wc, struct timespec)
 #define METRIC_BUFFER_SIZE             256
 #define SUBSYSTEM_METRICS_BUFFER_SIZE  4*METRIC_BUFFER_SIZE   // should be (number of metrics in subsys_accounting)*METRIC_BUFFER_SIZE
 #define MEASUREMENTS_BUFFER_SIZE       65536
+#define EQUAL(A, B) strncmp(A, B, strlen(B)) == 0
 
 /*
  * Static function declarations
@@ -610,7 +612,7 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   return -EINVAL;
 }
 
-int rscfl_store_data(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp)
+int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp)
 {
   if (data == NULL || rhdl == NULL){
     fprintf(stderr, "Can't store data since data pointer or rscfl_handle is null.\n");
@@ -627,7 +629,11 @@ int rscfl_store_data(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long
     struct influxDB_data buffer;
     int bytes, sent, total;
     buffer.data = data;
-    buffer.timestamp = timestamp;
+    if (timestamp != 0){
+      buffer.timestamp = timestamp;
+    } else {
+      buffer.timestamp = get_timestamp();
+    }
     total = sizeof(struct influxDB_data);
     sent = 0;
     do
@@ -740,6 +746,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
 
     if (curl_easy_setopt(rhdl->influx.curl, CURLOPT_URL, url) != CURLE_OK){
       fprintf(stderr, "Insufficient heap space, can't initialise URL to query measurements.\n");
+      free(str.ptr);
       return NULL;
     }
     snprintf(message, strlen(query) + 3, "q=%s", query);
@@ -751,6 +758,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     if (rv = curl_easy_perform(rhdl->influx.curl))
     {
       fprintf(stderr, "Can't query measurement - libcurl error (%d): %s\n", rv, curl_easy_strerror(rv));
+      free(str.ptr);
       return NULL;
     }
 
@@ -758,6 +766,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     if (rv == CURLE_OK && response_code != 200 && response_code != 204)
     {
       fprintf(stderr, "Couldn't query measurements, HTTP response code from InfluxDB: %ld.\n", response_code);
+      free(str.ptr);
       return NULL;
     }
     /* make it so that responses from following requests go to stdout again */
@@ -770,7 +779,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
   }
 }
 
-mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options)
+mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *options)
 {
   if (rhdl == NULL || query == NULL){
     fprintf(stderr, "Can't query extra data since rscfl handle pointer or query pointer is NULL.\n");
@@ -806,6 +815,110 @@ mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options)
                     "when calling rscfl_init.\n");
     return NULL;
   }
+}
+
+query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
+                              char *subsystem_name, unsigned long long since_us)
+{
+  if (rhdl == NULL || measurement_name == NULL || function == NULL){
+    fprintf(stderr, "Can't perform special query, some parameters are missing.\n");
+    return NULL;
+  }
+  char *empty_query;
+  char query[256];
+  unsigned long long since_ns = since_us * 1000;
+  if (subsystem_name != NULL && since_ns != 0){
+    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" = /%s/ AND \"time\" >= %llu";
+    snprintf(query, 256, empty_query, function, measurement_name, subsystem_name, since_ns);
+  } else if (subsystem_name != NULL){
+    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" = /%s/";
+    snprintf(query, 256, empty_query, function, measurement_name, subsystem_name);
+  } else if (since_ns != 0){
+    if (EQUAL(function, MIN) || EQUAL(function, MAX)){
+      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\" WHERE \"time\" >= %llu";
+    } else {
+      empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"time\" >= %llu";
+    }
+    snprintf(query, 256, empty_query, function, measurement_name, since_ns);
+  } else {
+    if (EQUAL(function, MIN) || EQUAL(function, MAX)){
+      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\"";
+    } else {
+      empty_query = "SELECT %s(\"value\") FROM \"%s\"";
+    }
+    snprintf(query, 256, empty_query, function, measurement_name);
+  }
+  char *response = rscfl_query_measurements(rhdl, query);
+  cJSON *response_json;
+  if (response == NULL){
+    return NULL;
+  } else {
+    response_json = cJSON_Parse(response);
+    free(response);
+  }
+
+  cJSON *results_array = cJSON_GetObjectItem(response_json, "results");
+  cJSON *result_json = cJSON_GetArrayItem(results_array, 0);
+  cJSON *error = cJSON_GetObjectItem(result_json, "error");
+  if (error != NULL){
+    if (cJSON_IsString(error) && (error->valuestring != NULL))
+    {
+      fprintf(stderr, "Error occured when trying to submit query \"%s\".\nError:\n%s\n",
+              query, error->valuestring);
+    }
+    return NULL;
+  }
+  cJSON *series_array = cJSON_GetObjectItem(result_json, "series");
+  cJSON *series_json = cJSON_GetArrayItem(series_array, 0);
+  cJSON *values_2D_array = cJSON_GetObjectItem(series_json, "values");
+  cJSON *values_array = cJSON_GetArrayItem(values_2D_array, 0);
+
+  query_result_t *result = (query_result_t *) malloc(sizeof(query_result_t));
+  result->value = 0;
+  result->timestamp = 0;
+  result->subsystem_name = NULL;
+
+  cJSON *value = cJSON_GetArrayItem(values_array, 1);
+  if (cJSON_IsNumber(value))
+  {
+    result->value = (int) value->valuedouble;
+  } else {
+    goto error;
+  }
+  if (subsystem_name == NULL && (EQUAL(function, MIN) || EQUAL(function, MAX))){
+    cJSON *timestamp = cJSON_GetArrayItem(values_array, 0);
+    if (cJSON_IsNumber(timestamp))
+    {
+      result->timestamp = (unsigned long long) timestamp->valuedouble;
+    } else {
+      goto error;
+    }
+
+    cJSON *subsystem_name = cJSON_GetArrayItem(values_array, 2);
+    if (cJSON_IsString(subsystem_name) && (subsystem_name->valuestring != NULL)){
+      result->subsystem_name = malloc(sizeof(char) * (strlen(subsystem_name->valuestring) + 1));
+      strncpy(result->subsystem_name, subsystem_name->valuestring, strlen(subsystem_name->valuestring) + 1);
+    } else {
+      goto error;
+    }
+  }
+  return result;
+
+error:
+  rscfl_free_query_result(result);
+  return NULL;
+}
+
+void rscfl_free_query_result(query_result_t *result)
+{
+  if (result != NULL){
+    if (result->subsystem_name != NULL)
+    {
+      free(result->subsystem_name);
+    }
+    free(result);
+  }
+  return;
 }
 
 bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string)

@@ -68,6 +68,14 @@ extern "C" {
 #include "rscfl/res_common.h"
 #include "rscfl/subsys_list.h"
 
+#define COUNT  "COUNT"
+#define MEAN   "MEAN"
+#define MEDIAN "MEDIAN"
+#define SPREAD "SPREAD"
+#define STDDEV "STDDEV"
+#define SUM    "SUM"
+#define MAX    "MAX"
+#define MIN    "MIN"
 
 #define MAX_PAYLOAD 1024 /* maximum payload size*/
 #define SUBSYS_AS_STR_ARRAY(a, b, c) [a] = c,
@@ -127,6 +135,12 @@ typedef struct influx_handle {
   int pipe_read;
   int pipe_write;
 } influx_handle_t;
+
+typedef struct query_result {
+  unsigned long long timestamp;
+  char *subsystem_name;
+  int value;
+} query_result_t;
 
 /*
  * rscfl_handle_t* (typedef-ed to rscfl_handle) represents the user-space
@@ -320,7 +334,10 @@ int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_toke
  * the subsys_idx_set * then belongs to the function and may be freed at any time.
  * Do not try to use it after calling this function. If you need it, copy it somewhere beforehand.
  */
-int rscfl_store_data(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp);
+#define rscfl_store_data(...) CONCAT(rscfl_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_store_data_2(handle, data) rscfl_store_data_api(handle, data, 0)
+#define rscfl_store_data_3(handle, data, timestamp) rscfl_store_data_api(handle, data, timestamp)
+int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp);
 
 #define rscfl_read_and_store_data(...) CONCAT(rscfl_read_and_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_read_and_store_data_1(handle) rscfl_read_and_store_data_api(handle, NULL)
@@ -339,7 +356,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query);
  * the mongoc_cursor_t * returned by this function then belongs to
  * the calling function and needs to be freed using mongoc_cursor_destroy()
  */
-mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options);
+mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *options);
 
 /*
  * the string parameter gets allocated memory, and needs to be freed with bson_free()
@@ -356,6 +373,11 @@ mongoc_cursor_t *query_extra_data(rscfl_handle rhdl, char *query, char *options)
  * case of an error or when there are no more documents to be returned.
  */
 bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string);
+
+query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
+                                     char *subsystem_name, unsigned long long since);
+
+void rscfl_free_query_result(query_result_t *result);
 
 /*
  * -- high level API functions --

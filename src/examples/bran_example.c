@@ -5,7 +5,7 @@
 int main(int argc, char** argv) {
   rscfl_handle rhdl;
 
-  rhdl = rscfl_init("test", 1);
+  rhdl = rscfl_init("test", 0);
 
   if(rhdl == NULL) {
     fprintf(stderr,
@@ -20,14 +20,14 @@ int main(int argc, char** argv) {
   /*
    * Storing data into database
    */
-  int err;
-  struct accounting acct;
+  // int err;
+  // struct accounting acct;
 
-  err = rscfl_acct(rhdl);
-  if(err) fprintf(stderr, "Error accounting for system call 1 [interest]\n");
-  FILE *fp = fopen("rscfl_file", "w");
+  // err = rscfl_acct(rhdl);
+  // if(err) fprintf(stderr, "Error accounting for system call 1 [interest]\n");
+  // FILE *fp = fopen("rscfl_file", "w");
 
-  rscfl_read_and_store_data(rhdl, "{\"extra_data\":\"yes\"}");
+  // rscfl_read_and_store_data(rhdl, "{\"extra_data\":\"yes\"}");
 
   // err = rscfl_acct(rhdl);
   // if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
@@ -37,22 +37,35 @@ int main(int argc, char** argv) {
   /*
    * Querying database
    */
-  sleep(2); // sleep on main thread to give other threads the chance to do their work
-  char *string1 = rscfl_query_measurements(rhdl, "select * from \"cpu.cycles\"");
-  if (string1){
-    printf("InfluxDB:\nselect * from \"cpu.cycles\"\n%s\n", string1);
-    free(string1);
+  // sleep(2); // sleep on main thread to give other threads the chance to do their work
+  // char *string1 = rscfl_query_measurements(rhdl, "select * from \"cpu.cycles\"");
+  // if (string1){
+  //   printf("InfluxDB:\nselect * from \"cpu.cycles\"\n%s\n", string1);
+  //   free(string1);
+  // }
+  // mongoc_cursor_t *cursor = query_extra_data(rhdl, "{}", NULL);
+  // if (cursor != NULL){
+  //   char *string2;
+  //   printf("MongoDB:\n");
+  //   while (rscfl_get_next_json(cursor, &string2)){
+  //     printf("Document from MongoDB:\n%s\n", string2);
+  //     bson_free(string2);
+  //   }
+  //   mongoc_cursor_destroy(cursor);
+  // }
+
+  /*
+   * Advanced queries
+   */
+  query_result_t * result;
+  result = rscfl_advanced_query(rhdl, "cpu.cycles", SUM, NULL, 0);
+  if (result != NULL){
+    printf("timestamp: %llu\nvalue: %d\nsubsystem_name: %s\n",
+           result->timestamp, result->value, result->subsystem_name);
+  } else {
+    printf("result was null\n");
   }
-  mongoc_cursor_t *cursor = query_extra_data(rhdl, "{}", NULL);
-  if (cursor != NULL){
-    char *string2;
-    printf("MongoDB:\n");
-    while (rscfl_get_next_json(cursor, &string2)){
-      printf("Document from MongoDB:\n%s\n", string2);
-      bson_free(string2);
-    }
-    mongoc_cursor_destroy(cursor);
-  }
+
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;
 }

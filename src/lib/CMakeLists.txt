@@ -9,10 +9,12 @@ find_package(CURL REQUIRED)
 
 add_library(${libp_NAME} SHARED
   ${LIB_DIR}/res_api.c
+  ${LIB_DIR}/cJSON.c
   ${LIB_DIR}/../res_common.c)
 add_dependencies(${libp_NAME} subsys_gen)
 add_library(${libp_NAME}_static STATIC
   ${LIB_DIR}/res_api.c
+  ${LIB_DIR}/cJSON.c
   ${LIB_DIR}/../res_common.c)
 add_dependencies(${libp_NAME}_static subsys_gen)
 
