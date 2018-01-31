@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
   //   printf("MongoDB:\n");
   //   while (rscfl_get_next_json(cursor, &string2)){
   //     printf("Document from MongoDB:\n%s\n", string2);
-  //     bson_free(string2);
+  //     rscfl_free_json(string2);
   //   }
   //   mongoc_cursor_destroy(cursor);
   // }
@@ -80,9 +80,17 @@ int main(int argc, char** argv) {
   // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, UNTIL, 1517262516171014)
   // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", UNTIL, 1517262516171014)
 
-  char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
-  printf("data:\n%s\n", extra_data);
-  rscfl_free_json(extra_data);
+  // char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
+  // printf("data:\n%s\n", extra_data);
+  // rscfl_free_json(extra_data);
+
+  timestamp_array_t array;
+  array = rscfl_get_timestamps(rhdl, "{\"extra_data\":\"yes\"}");
+  int i;
+  for(i = 0; i < array.length; i++){
+    printf("timestamp %d: %llu\n", i, array.ptr[i]);
+  }
+  rscfl_free_timestamp_array(array);
 
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;

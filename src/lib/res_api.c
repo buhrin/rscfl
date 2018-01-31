@@ -942,8 +942,8 @@ void rscfl_free_query_result(query_result_t *result)
 
 char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
 {
-  char query[128];
-  snprintf(query, 128, "{\"timestamp\":%llu}", timestamp);
+  char query[64];
+  snprintf(query, 64, "{\"timestamp\":%llu}", timestamp);
   mongoc_cursor_t *cursor = rscfl_query_extra_data(rhdl, query, "{\"projection\":{\"data\":1,\"_id\":0}}");
   char *response = NULL;
   char *extra_data = NULL;
@@ -961,6 +961,43 @@ char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
     mongoc_cursor_destroy(cursor);
   }
   return extra_data;
+}
+
+timestamp_array_t rscfl_get_timestamps(rscfl_handle rhdl, char *extra_data)
+{
+  char query[strlen(extra_data) + 10];
+  timestamp_array_t array;
+  array.ptr = NULL;
+  array.length = 0;
+  int array_size = 5; // initially we'll create an array that can hold 64 numbers
+
+  snprintf(query, sizeof(query), "{\"data\":%s}", extra_data);
+  mongoc_cursor_t *cursor = rscfl_query_extra_data(rhdl, query, "{\"projection\":{\"timestamp\":1,\"_id\":0}}");
+
+  if (cursor != NULL){
+    char *response;
+    cJSON *response_json;
+    cJSON *timestamp;
+    array.ptr = (unsigned long long *)malloc(array_size * sizeof(unsigned long long));
+    while (rscfl_get_next_json(cursor, &response)){
+      response_json = cJSON_Parse(response);
+      timestamp = cJSON_GetObjectItem(response_json, "timestamp");
+      if (cJSON_IsNumber(timestamp)) {
+        if (array.length == array_size){
+          // if the array is full, double it in size
+          array_size *= 2;
+          array.ptr = (unsigned long long *)realloc(array.ptr, array_size * sizeof(unsigned long long));
+        }
+        array.ptr[array.length] = (unsigned long long)timestamp->valuedouble;
+        array.length++;
+      }
+      rscfl_free_json(response);
+    }
+    mongoc_cursor_destroy(cursor);
+  }
+  // trim the allocated memory
+  array.ptr = (unsigned long long *)realloc(array.ptr, array.length * sizeof(unsigned long long));
+  return array;
 }
 
 bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string)

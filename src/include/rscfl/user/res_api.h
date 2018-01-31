@@ -142,6 +142,11 @@ typedef struct query_result {
   double value;
 } query_result_t;
 
+typedef struct timestamp_array {
+  unsigned long long *ptr;
+  int length;
+} timestamp_array_t;
+
 enum timeline {
   NONE,
   UNTIL,
@@ -397,12 +402,24 @@ void rscfl_free_query_result(query_result_t *result);
  * the char * returned by this function then belongs to the calling
  * function and needs to be freed using rscfl_free_json()
  */
-char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
+char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp);
 
 /*
  * used to free the char * returned by rscfl_get_extra_data()
  */
 #define rscfl_free_json(string) bson_free(string)
+
+/*
+ * returns an array of timestamps that contain the data specified in
+ * 'extra_data'. the caller is responsible for freeing this array using
+ * rscfl_free_timestamp_array()
+ */
+timestamp_array_t rscfl_get_timestamps(rscfl_handle rhdl, char *extra_data);
+
+/*
+ * used to free the timestamp_array_t returned by rscfl_get_timestamps()
+ */
+#define rscfl_free_timestamp_array(array) free(array.ptr)
 
 /*
  * -- high level API functions --
