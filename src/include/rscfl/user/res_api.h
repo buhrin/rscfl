@@ -139,8 +139,15 @@ typedef struct influx_handle {
 typedef struct query_result {
   unsigned long long timestamp;
   char *subsystem_name;
-  int value;
+  double value;
 } query_result_t;
+
+enum timeline {
+  NONE,
+  UNTIL,
+  EXACTLY_AT,
+  SINCE
+};
 
 /*
  * rscfl_handle_t* (typedef-ed to rscfl_handle) represents the user-space
@@ -375,7 +382,7 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
 bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string);
 
 query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
-                                     char *subsystem_name, unsigned long long since);
+                                     char *subsystem_name, enum timeline direction, unsigned long long time);
 
 void rscfl_free_query_result(query_result_t *result);
 

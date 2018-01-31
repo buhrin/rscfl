@@ -734,7 +734,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     long response_code;
     struct String str;
 
-    snprintf(url, 64, "http://localhost:8086/query?db=%s", rhdl->app_name);
+    snprintf(url, 64, "http://localhost:8086/query?db=%s&epoch=u", rhdl->app_name);
 
     /* Initialise the return string */
     str.ptr = malloc(1);  /* will be grown as needed by the realloc above */
@@ -818,28 +818,46 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
 }
 
 query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
-                              char *subsystem_name, unsigned long long since_us)
+                                     char *subsystem_name, enum timeline direction, unsigned long long time_us)
 {
   if (rhdl == NULL || measurement_name == NULL || function == NULL){
     fprintf(stderr, "Can't perform special query, some parameters are missing.\n");
     return NULL;
   }
+
+  if ((direction == NONE && time_us != 0) || (direction != NONE && time_us == 0)){
+    fprintf(stderr, "You must specify neither or both of 'direction' and 'time_us'.\n");
+    return NULL;
+  }
+
+  char *operator_string;
+  if (direction == UNTIL){
+    operator_string = "<=";
+  } else if (direction == EXACTLY_AT){
+    operator_string = "=";
+  } else if (direction == SINCE){
+    operator_string = ">=";
+  } else if (direction != NONE){
+    fprintf(stderr, "The input operator must be one of UNTIL, EXACTLY_AT or SINCE.\n");
+    return NULL;
+  }
+
   char *empty_query;
   char query[256];
-  unsigned long long since_ns = since_us * 1000;
-  if (subsystem_name != NULL && since_ns != 0){
-    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" = /%s/ AND \"time\" >= %llu";
-    snprintf(query, 256, empty_query, function, measurement_name, subsystem_name, since_ns);
+  unsigned long long time_ns = time_us * 1000;
+  if (subsystem_name != NULL && time_ns != 0){
+    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/ AND \"time\" %s %llu";
+    snprintf(query, 256, empty_query, function, measurement_name, subsystem_name, operator_string, time_ns);
   } else if (subsystem_name != NULL){
-    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" = /%s/";
+    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/";
     snprintf(query, 256, empty_query, function, measurement_name, subsystem_name);
-  } else if (since_ns != 0){
+  } else if (time_ns != 0){
     if (EQUAL(function, MIN) || EQUAL(function, MAX)){
-      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\" WHERE \"time\" >= %llu";
+      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\" WHERE \"time\" %s %llu";
     } else {
-      empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"time\" >= %llu";
+      empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"time\" %s %llu";
     }
-    snprintf(query, 256, empty_query, function, measurement_name, since_ns);
+    snprintf(query, 256, empty_query, function, measurement_name, operator_string, time_ns);
   } else {
     if (EQUAL(function, MIN) || EQUAL(function, MAX)){
       empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\"";
@@ -881,11 +899,11 @@ query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, 
   cJSON *value = cJSON_GetArrayItem(values_array, 1);
   if (cJSON_IsNumber(value))
   {
-    result->value = (int) value->valuedouble;
+    result->value = value->valuedouble;
   } else {
     goto error;
   }
-  if (subsystem_name == NULL && (EQUAL(function, MIN) || EQUAL(function, MAX))){
+  if (EQUAL(function, MIN) || EQUAL(function, MAX)){
     cJSON *timestamp = cJSON_GetArrayItem(values_array, 0);
     if (cJSON_IsNumber(timestamp))
     {
@@ -893,13 +911,14 @@ query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, 
     } else {
       goto error;
     }
-
-    cJSON *subsystem_name = cJSON_GetArrayItem(values_array, 2);
-    if (cJSON_IsString(subsystem_name) && (subsystem_name->valuestring != NULL)){
-      result->subsystem_name = malloc(sizeof(char) * (strlen(subsystem_name->valuestring) + 1));
-      strncpy(result->subsystem_name, subsystem_name->valuestring, strlen(subsystem_name->valuestring) + 1);
-    } else {
-      goto error;
+    if (subsystem_name == NULL){
+      cJSON *subsystem_name = cJSON_GetArrayItem(values_array, 2);
+      if (cJSON_IsString(subsystem_name) && (subsystem_name->valuestring != NULL)){
+        result->subsystem_name = malloc(sizeof(char) * (strlen(subsystem_name->valuestring) + 1));
+        strncpy(result->subsystem_name, subsystem_name->valuestring, strlen(subsystem_name->valuestring) + 1);
+      } else {
+        goto error;
+      }
     }
   }
   return result;
