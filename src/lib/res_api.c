@@ -940,6 +940,29 @@ void rscfl_free_query_result(query_result_t *result)
   return;
 }
 
+char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
+{
+  char query[128];
+  snprintf(query, 128, "{\"timestamp\":%llu}", timestamp);
+  mongoc_cursor_t *cursor = rscfl_query_extra_data(rhdl, query, "{\"projection\":{\"data\":1,\"_id\":0}}");
+  char *response = NULL;
+  char *extra_data = NULL;
+  if (cursor != NULL){
+    if (rscfl_get_next_json(cursor, &response)) {
+      cJSON *response_json = cJSON_Parse(response);
+      cJSON *data = cJSON_GetObjectItem(response_json, "data");
+      extra_data = cJSON_PrintUnformatted(data);
+
+      if (rscfl_get_next_json(cursor, &response))
+      {
+        fprintf(stderr, "More than one result found for timestamp %llu, but only one will be returned.", timestamp);
+      }
+    }
+    mongoc_cursor_destroy(cursor);
+  }
+  return extra_data;
+}
+
 bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string)
 {
   if (cursor == NULL){

@@ -14,7 +14,7 @@
 int main(int argc, char** argv) {
   rscfl_handle rhdl;
 
-  rhdl = rscfl_init("test", 0);
+  rhdl = rscfl_init("test", 1);
 
   if(rhdl == NULL) {
     fprintf(stderr,
@@ -66,19 +66,23 @@ int main(int argc, char** argv) {
   /*
    * Advanced queries
    */
-  query_result_t *result;
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, NONE, 0)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, SINCE, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, EXACTLY_AT, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, UNTIL, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", NONE, 0)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", SINCE, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", EXACTLY_AT, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", UNTIL, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, SINCE, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", SINCE, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, UNTIL, 1517262516171014)
-  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", UNTIL, 1517262516171014)
+  // query_result_t *result;
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, NONE, 0)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, SINCE, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, EXACTLY_AT, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, UNTIL, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", NONE, 0)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", SINCE, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", EXACTLY_AT, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", UNTIL, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, SINCE, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", SINCE, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, UNTIL, 1517262516171014)
+  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", UNTIL, 1517262516171014)
+
+  char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
+  printf("data:\n%s\n", extra_data);
+  rscfl_free_json(extra_data);
 
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;

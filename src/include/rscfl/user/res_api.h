@@ -373,7 +373,7 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
  *  while (rscfl_get_next_json(cursor, &string)){
  *    // do something with the string (transform into json and parse, or strcpy somewhere else)
  *    ...
- *    bson_free(string);
+ *    rscfl_free_json(string);
  *  }
  *
  * The return value is true if 'string' contains a new string and false in the
@@ -381,10 +381,28 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
  */
 bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string);
 
+/*
+ * the query_result_t * returned by this function then belongs to
+ * the calling function and needs to be freed using rscfl_free_query_result()
+ */
 query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
                                      char *subsystem_name, enum timeline direction, unsigned long long time);
 
+/*
+ * used to free the query_result_t * returned by rscfl_advanced_query()
+ */
 void rscfl_free_query_result(query_result_t *result);
+
+/*
+ * the char * returned by this function then belongs to the calling
+ * function and needs to be freed using rscfl_free_json()
+ */
+char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
+
+/*
+ * used to free the char * returned by rscfl_get_extra_data()
+ */
+#define rscfl_free_json(string) bson_free(string)
 
 /*
  * -- high level API functions --
