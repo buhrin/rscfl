@@ -147,13 +147,6 @@ typedef struct timestamp_array {
   int length;
 } timestamp_array_t;
 
-enum timeline {
-  NONE,
-  UNTIL,
-  EXACTLY_AT,
-  SINCE
-};
-
 /*
  * rscfl_handle_t* (typedef-ed to rscfl_handle) represents the user-space
  * descriptor for interacting with the kernel module. This is obtained
@@ -390,8 +383,17 @@ bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string);
  * the query_result_t * returned by this function then belongs to
  * the calling function and needs to be freed using rscfl_free_query_result()
  */
-query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
-                                     char *subsystem_name, enum timeline direction, unsigned long long time);
+#define rscfl_advanced_query(...) CONCAT(rscfl_advanced_query_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_advanced_query_4(handle, measurement_name, funtion, subsystem_name) \
+  rscfl_advanced_query_api(handle, measurement_name, funtion, subsystem_name, 0, 0)
+#define rscfl_advanced_query_5(handle, measurement_name, funtion, subsystem_name, timestamp) \
+  rscfl_advanced_query_api(handle, measurement_name, funtion, subsystem_name, timestamp, timestamp)
+#define rscfl_advanced_query_6(handle, measurement_name, funtion, subsystem_name, time_since, time_until) \
+  rscfl_advanced_query_api(handle, measurement_name, funtion, subsystem_name, time_since, time_until)
+query_result_t *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
+                                     char *function, char *subsystem_name,
+                                     unsigned long long time_since_us,
+                                     unsigned long long time_until_us);
 
 /*
  * used to free the query_result_t * returned by rscfl_advanced_query()

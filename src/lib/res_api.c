@@ -817,47 +817,42 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
   }
 }
 
-query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, char *function,
-                                     char *subsystem_name, enum timeline direction, unsigned long long time_us)
+query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name,
+                                     char *function, char *subsystem_name,
+                                     unsigned long long time_since_us,
+                                     unsigned long long time_until_us)
 {
   if (rhdl == NULL || measurement_name == NULL || function == NULL){
     fprintf(stderr, "Can't perform special query, some parameters are missing.\n");
     return NULL;
   }
 
-  if ((direction == NONE && time_us != 0) || (direction != NONE && time_us == 0)){
-    fprintf(stderr, "You must specify neither or both of 'direction' and 'time_us'.\n");
-    return NULL;
-  }
-
-  char *operator_string;
-  if (direction == UNTIL){
-    operator_string = "<=";
-  } else if (direction == EXACTLY_AT){
-    operator_string = "=";
-  } else if (direction == SINCE){
-    operator_string = ">=";
-  } else if (direction != NONE){
-    fprintf(stderr, "The input operator must be one of UNTIL, EXACTLY_AT or SINCE.\n");
-    return NULL;
+  if (time_until_us == 0) {
+    time_until_us = get_timestamp();
   }
 
   char *empty_query;
   char query[256];
-  unsigned long long time_ns = time_us * 1000;
-  if (subsystem_name != NULL && time_ns != 0){
-    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/ AND \"time\" %s %llu";
-    snprintf(query, 256, empty_query, function, measurement_name, subsystem_name, operator_string, time_ns);
+  unsigned long long time_since_ns = time_since_us * 1000;
+  unsigned long long time_until_ns = time_until_us * 1000;
+  if (subsystem_name != NULL && (time_since_ns != 0 || time_until_ns != 0)){
+    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/ "
+                  "AND \"time\" >= %llu AND \"time\" <= %llu";
+    snprintf(query, 256, empty_query, function, measurement_name,
+             subsystem_name, time_since_ns, time_until_ns);
   } else if (subsystem_name != NULL){
     empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/";
     snprintf(query, 256, empty_query, function, measurement_name, subsystem_name);
-  } else if (time_ns != 0){
+  } else if (time_since_ns != 0 || time_until_ns != 0){
     if (EQUAL(function, MIN) || EQUAL(function, MAX)){
-      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\" WHERE \"time\" %s %llu";
+      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\" "
+                    "WHERE \"time\" >= %llu AND \"time\" <= %llu";
     } else {
-      empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"time\" %s %llu";
+      empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE "
+                    "\"time\" >= %llu AND \"time\" <= %llu";
     }
-    snprintf(query, 256, empty_query, function, measurement_name, operator_string, time_ns);
+    snprintf(query, 256, empty_query, function, measurement_name, time_since_ns,
+             time_until_ns);
   } else {
     if (EQUAL(function, MIN) || EQUAL(function, MAX)){
       empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\"";
@@ -881,7 +876,7 @@ query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name, 
   if (error != NULL){
     if (cJSON_IsString(error) && (error->valuestring != NULL))
     {
-      fprintf(stderr, "Error occured when trying to submit query \"%s\".\nError:\n%s\n",
+      fprintf(stderr, "Error occured when trying to submit query \"%s\".\nError: %s\n",
               query, error->valuestring);
     }
     return NULL;
@@ -969,7 +964,7 @@ timestamp_array_t rscfl_get_timestamps(rscfl_handle rhdl, char *extra_data)
   timestamp_array_t array;
   array.ptr = NULL;
   array.length = 0;
-  int array_size = 5; // initially we'll create an array that can hold 64 numbers
+  int array_size = 64; // initially we'll create an array that can hold 64 numbers
 
   snprintf(query, sizeof(query), "{\"data\":%s}", extra_data);
   mongoc_cursor_t *cursor = rscfl_query_extra_data(rhdl, query, "{\"projection\":{\"timestamp\":1,\"_id\":0}}");
@@ -994,6 +989,8 @@ timestamp_array_t rscfl_get_timestamps(rscfl_handle rhdl, char *extra_data)
       rscfl_free_json(response);
     }
     mongoc_cursor_destroy(cursor);
+  } else {
+    return array;
   }
   // trim the allocated memory
   array.ptr = (unsigned long long *)realloc(array.ptr, array.length * sizeof(unsigned long long));
