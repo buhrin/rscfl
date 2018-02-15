@@ -3,7 +3,7 @@
 #include <rscfl/user/res_api.h>
 
 #define ADVANCED_QUERY_PRINT(...)                                              \
-  result = rscfl_advanced_query(rhdl, __VA_ARGS__);                            \
+  result = rscfl_advanced_query_with_function(rhdl, __VA_ARGS__);              \
   if (result != NULL) {                                                        \
     printf("timestamp: %llu\nvalue: %f\nsubsystem_name: %s\n",                 \
            result->timestamp, result->value, result->subsystem_name);          \
@@ -80,17 +80,25 @@ int main(int argc, char** argv) {
   // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, 0, 1517262516171014)
   // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", 0, 1517262516171014)
 
+  char *result = rscfl_advanced_query(rhdl, "cpu.cycles", NULL);
+  if (result != NULL){
+    printf("%s\n", result);
+    free(result);
+  } else {
+    fprintf(stderr, "result from advanced query is null\n");
+  }
+
   // char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
   // printf("data:\n%s\n", extra_data);
   // rscfl_free_json(extra_data);
 
-  timestamp_array_t array;
-  array = rscfl_get_timestamps(rhdl, "{\"extra_data\":\"yes\"}");
-  int i;
-  for(i = 0; i < array.length; i++){
-    printf("timestamp %d: %llu\n", i, array.ptr[i]);
-  }
-  rscfl_free_timestamp_array(array);
+  // timestamp_array_t array;
+  // array = rscfl_get_timestamps(rhdl, "{\"extra_data\":\"yes\"}");
+  // int i;
+  // for(i = 0; i < array.length; i++){
+  //   printf("timestamp %d: %llu\n", i, array.ptr[i]);
+  // }
+  // rscfl_free_timestamp_array(array);
 
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;

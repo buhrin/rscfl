@@ -72,6 +72,10 @@ static void *influxDB_sender(void *param);
 static void *mongoDB_sender(void *param);
 static void influxDB_cleanup(rscfl_handle rhdl);
 static void mongoDB_cleanup(rscfl_handle rhdl);
+static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
+                                  char *function, char *subsystem_name,
+                                  unsigned long long time_since_us,
+                                  unsigned long long time_until_us);
 
 struct String{
   char *ptr;
@@ -817,51 +821,17 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
   }
 }
 
-query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name,
-                                     char *function, char *subsystem_name,
-                                     unsigned long long time_since_us,
-                                     unsigned long long time_until_us)
+query_result_t *rscfl_advanced_query_with_function_api(rscfl_handle rhdl,
+    char *measurement_name, char *function, char *subsystem_name,
+    unsigned long long time_since_us, unsigned long long time_until_us)
 {
   if (rhdl == NULL || measurement_name == NULL || function == NULL){
-    fprintf(stderr, "Can't perform special query, some parameters are missing.\n");
+    fprintf(stderr, "Can't perform special query with function, some parameters are missing.\n");
     return NULL;
   }
 
-  if (time_until_us == 0) {
-    time_until_us = get_timestamp();
-  }
-
-  char *empty_query;
-  char query[256];
-  unsigned long long time_since_ns = time_since_us * 1000;
-  unsigned long long time_until_ns = time_until_us * 1000;
-  if (subsystem_name != NULL && (time_since_ns != 0 || time_until_ns != 0)){
-    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/ "
-                  "AND \"time\" >= %llu AND \"time\" <= %llu";
-    snprintf(query, 256, empty_query, function, measurement_name,
-             subsystem_name, time_since_ns, time_until_ns);
-  } else if (subsystem_name != NULL){
-    empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE \"subsystem\" =~ /%s/";
-    snprintf(query, 256, empty_query, function, measurement_name, subsystem_name);
-  } else if (time_since_ns != 0 || time_until_ns != 0){
-    if (EQUAL(function, MIN) || EQUAL(function, MAX)){
-      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\" "
-                    "WHERE \"time\" >= %llu AND \"time\" <= %llu";
-    } else {
-      empty_query = "SELECT %s(\"value\") FROM \"%s\" WHERE "
-                    "\"time\" >= %llu AND \"time\" <= %llu";
-    }
-    snprintf(query, 256, empty_query, function, measurement_name, time_since_ns,
-             time_until_ns);
-  } else {
-    if (EQUAL(function, MIN) || EQUAL(function, MAX)){
-      empty_query = "SELECT %s(\"value\"),\"subsystem\" FROM \"%s\"";
-    } else {
-      empty_query = "SELECT %s(\"value\") FROM \"%s\"";
-    }
-    snprintf(query, 256, empty_query, function, measurement_name);
-  }
-  char *response = rscfl_query_measurements(rhdl, query);
+  char *response = build_advanced_query(rhdl, measurement_name, function, subsystem_name,
+                                        time_since_us, time_until_us);
   cJSON *response_json;
   if (response == NULL){
     return NULL;
@@ -875,10 +845,11 @@ query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name,
   cJSON *error = cJSON_GetObjectItem(result_json, "error");
   if (error != NULL){
     if (cJSON_IsString(error) && (error->valuestring != NULL))
-    {
-      fprintf(stderr, "Error occured when trying to submit query \"%s\".\nError: %s\n",
-              query, error->valuestring);
+      fprintf(stderr,
+              "Error occured when trying to submit advanced query.\nError: %s\n",
+              error->valuestring);
     }
+    cJSON_Delete(response_json);
     return NULL;
   }
   cJSON *series_array = cJSON_GetObjectItem(result_json, "series");
@@ -916,11 +887,54 @@ query_result_t *rscfl_advanced_query(rscfl_handle rhdl, char *measurement_name,
       }
     }
   }
+  cJSON_Delete(response_json);
   return result;
 
 error:
+  cJSON_Delete(response_json);
   rscfl_free_query_result(result);
   return NULL;
+}
+
+char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
+    char *subsystem_name, unsigned long long time_since_us,
+    unsigned long long time_until_us)
+{
+  if (rhdl == NULL || measurement_name == NULL) {
+    fprintf(stderr,
+            "Can't perform special query with function, some parameters are "
+            "missing.\n");
+    return NULL;
+  }
+
+  char *response = build_advanced_query(rhdl, measurement_name, NULL, subsystem_name,
+                                        time_since_us, time_until_us);
+  cJSON *response_json;
+  if (response == NULL) {
+    return NULL;
+  } else {
+    response_json = cJSON_Parse(response);
+    free(response);
+  }
+
+  cJSON *results_array = cJSON_GetObjectItem(response_json, "results");
+  cJSON *result_json = cJSON_GetArrayItem(results_array, 0);
+  cJSON *error = cJSON_GetObjectItem(result_json, "error");
+  if (error != NULL) {
+    if (cJSON_IsString(error) && (error->valuestring != NULL)) {
+      fprintf(stderr,
+              "Error occured when trying to submit advanced query.\nError: %s\n",
+              error->valuestring);
+    }
+    cJSON_Delete(response_json);
+    return NULL;
+  }
+  cJSON *series_array = cJSON_GetObjectItem(result_json, "series");
+  cJSON *series_json = cJSON_GetArrayItem(series_array, 0);
+  char *series_string = cJSON_Print(series_json);
+
+  cJSON_Delete(response_json);
+  return series_string;
 }
 
 void rscfl_free_query_result(query_result_t *result)
@@ -1713,4 +1727,59 @@ static void mongoDB_cleanup(rscfl_handle rhdl)
     close(rhdl->mongo.fd);
     rhdl->mongo.fd = -1;
   }
+}
+
+static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
+                                  char *function, char *subsystem_name,
+                                  unsigned long long time_since_us,
+                                  unsigned long long time_until_us)
+{
+  if (time_until_us == 0) {
+    time_until_us = get_timestamp();
+  }
+  char select_value[32];
+  if (function == NULL){
+    snprintf(select_value, 32, "\"value\"");
+  } else {
+    snprintf(select_value, 32, "%s(\"value\")", function);
+  }
+
+  char *empty_query;
+  char query[256];
+  unsigned long long time_since_ns = time_since_us * 1000;
+  unsigned long long time_until_ns = time_until_us * 1000;
+  if (subsystem_name != NULL && (time_since_ns != 0 || time_until_ns != 0)) {
+    empty_query =
+        "SELECT %s FROM \"%s\" WHERE \"subsystem\" =~ /%s/ "
+        "AND \"time\" >= %llu AND \"time\" <= %llu";
+    snprintf(query, 256, empty_query, select_value, measurement_name,
+             subsystem_name, time_since_ns, time_until_ns);
+  } else if (subsystem_name != NULL) {
+    empty_query =
+        "SELECT %s FROM \"%s\" WHERE \"subsystem\" =~ /%s/";
+    snprintf(query, 256, empty_query, select_value, measurement_name,
+             subsystem_name);
+  } else if (time_since_ns != 0 || time_until_ns != 0) {
+    if (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX)) {
+      empty_query =
+          "SELECT %s,\"subsystem\" FROM \"%s\" "
+          "WHERE \"time\" >= %llu AND \"time\" <= %llu";
+    } else {
+      empty_query =
+          "SELECT %s FROM \"%s\" WHERE "
+          "\"time\" >= %llu AND \"time\" <= %llu";
+    }
+    snprintf(query, 256, empty_query, select_value, measurement_name, time_since_ns,
+             time_until_ns);
+  } else {
+    if (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX)) {
+      empty_query = "SELECT %s,\"subsystem\" FROM \"%s\"";
+    } else {
+      empty_query = "SELECT %s FROM \"%s\"";
+    }
+    snprintf(query, 256, empty_query, select_value, measurement_name);
+  }
+  char *response = rscfl_query_measurements(rhdl, query);
+
+  return response;
 }
