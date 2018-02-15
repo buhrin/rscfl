@@ -30,6 +30,7 @@
 #include "rscfl/cJSON.h"
 
 
+// macro function definitions
 #define max(a,b)                                \
   ({ typeof (a) _a = (a);                       \
     typeof (b) _b = (b);                        \
@@ -40,19 +41,21 @@
     typeof (b) _b = (b);                        \
     _a > _b ? _b : _a; })
 
-// macro function definitions
 DEFINE_REDUCE_FUNCTION(rint, ru64)
 DEFINE_REDUCE_FUNCTION(wc, struct timespec)
-#define EXTRACT_METRIC(metric_name, metric_value, modifier)                           \
-  snprintf(metric, METRIC_BUFFER_SIZE, "%s,subsystem=%s value=" modifier " %llu\n",   \
-           metric_name, subsystem_name, metric_value, timestamp);                     \
-  strncat(subsystem_metrics, metric, METRIC_BUFFER_SIZE);                             \
+
+#define EQUAL(A, B) strncmp(A, B, strlen(B)) == 0
+#define EXTRACT_METRIC(metric_name, metric_value, modifier)                  \
+  snprintf(metric, METRIC_BUFFER_SIZE,                                       \
+           "%s,measurement_id=%llu,subsystem=%s value=" modifier " %llu\n",  \
+           metric_name, timestamp, subsystem_name, metric_value, timestamp); \
+  strncat(subsystem_metrics, metric, METRIC_BUFFER_SIZE);                    \
   memset(metric, 0, METRIC_BUFFER_SIZE);
 
+// constant definitions
 #define METRIC_BUFFER_SIZE             256
 #define SUBSYSTEM_METRICS_BUFFER_SIZE  4*METRIC_BUFFER_SIZE   // should be (number of metrics in subsys_accounting)*METRIC_BUFFER_SIZE
 #define MEASUREMENTS_BUFFER_SIZE       65536
-#define EQUAL(A, B) strncmp(A, B, strlen(B)) == 0
 
 /*
  * Static function declarations
@@ -75,8 +78,10 @@ static void mongoDB_cleanup(rscfl_handle rhdl);
 static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                                   char *function, char *subsystem_name,
                                   unsigned long long time_since_us,
-                                  unsigned long long time_until_us);
+                                  unsigned long long time_until_us,
+                                  timestamp_array_t *timestamps);
 
+// private struct definitions
 struct String{
   char *ptr;
   size_t length;
@@ -831,7 +836,7 @@ query_result_t *rscfl_advanced_query_with_function_api(rscfl_handle rhdl,
   }
 
   char *response = build_advanced_query(rhdl, measurement_name, function, subsystem_name,
-                                        time_since_us, time_until_us);
+                                        time_since_us, time_until_us, NULL);
   cJSON *response_json;
   if (response == NULL){
     return NULL;
@@ -844,7 +849,7 @@ query_result_t *rscfl_advanced_query_with_function_api(rscfl_handle rhdl,
   cJSON *result_json = cJSON_GetArrayItem(results_array, 0);
   cJSON *error = cJSON_GetObjectItem(result_json, "error");
   if (error != NULL){
-    if (cJSON_IsString(error) && (error->valuestring != NULL))
+    if (cJSON_IsString(error) && (error->valuestring != NULL)){
       fprintf(stderr,
               "Error occured when trying to submit advanced query.\nError: %s\n",
               error->valuestring);
@@ -908,7 +913,7 @@ char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
   }
 
   char *response = build_advanced_query(rhdl, measurement_name, NULL, subsystem_name,
-                                        time_since_us, time_until_us);
+                                        time_since_us, time_until_us, NULL);
   cJSON *response_json;
   if (response == NULL) {
     return NULL;
@@ -947,6 +952,16 @@ void rscfl_free_query_result(query_result_t *result)
     free(result);
   }
   return;
+}
+
+char *rscfl_build_advanced_query(rscfl_handle rhdl, char *measurement_name,
+                                  char *function, char *subsystem_name,
+                                  unsigned long long time_since_us,
+                                  unsigned long long time_until_us,
+                                  timestamp_array_t *timestamps)
+{
+  return build_advanced_query(rhdl, measurement_name, function, subsystem_name,
+                                  time_since_us, time_until_us, timestamps);
 }
 
 char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
@@ -1732,53 +1747,100 @@ static void mongoDB_cleanup(rscfl_handle rhdl)
 static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                                   char *function, char *subsystem_name,
                                   unsigned long long time_since_us,
-                                  unsigned long long time_until_us)
+                                  unsigned long long time_until_us,
+                                  timestamp_array_t *timestamps)
 {
-  if (time_until_us == 0) {
-    time_until_us = get_timestamp();
-  }
-  char select_value[32];
+  char select_clause[32];
   if (function == NULL){
-    snprintf(select_value, 32, "\"value\"");
+    snprintf(select_clause, 32, "\"value\"");
   } else {
-    snprintf(select_value, 32, "%s(\"value\")", function);
+    snprintf(select_clause, 32, "%s(\"value\")", function);
   }
+  // printf("\n\nselect_clause: %s\n", select_clause);
 
-  char *empty_query;
-  char query[256];
+  char *subsystem_constraint = "";
+  if (subsystem_name != NULL) {
+    subsystem_constraint = (char *)malloc((strlen(subsystem_name) + 32)*sizeof(char));
+    snprintf(subsystem_constraint, strlen(subsystem_name) + 32,
+             "\"subsystem\" =~ /%s/", subsystem_name);
+  }
+  // printf("subsystem_constraint: %s\n", subsystem_constraint);
+
+  char time_constraint[64];
   unsigned long long time_since_ns = time_since_us * 1000;
   unsigned long long time_until_ns = time_until_us * 1000;
-  if (subsystem_name != NULL && (time_since_ns != 0 || time_until_ns != 0)) {
-    empty_query =
-        "SELECT %s FROM \"%s\" WHERE \"subsystem\" =~ /%s/ "
-        "AND \"time\" >= %llu AND \"time\" <= %llu";
-    snprintf(query, 256, empty_query, select_value, measurement_name,
-             subsystem_name, time_since_ns, time_until_ns);
-  } else if (subsystem_name != NULL) {
-    empty_query =
-        "SELECT %s FROM \"%s\" WHERE \"subsystem\" =~ /%s/";
-    snprintf(query, 256, empty_query, select_value, measurement_name,
-             subsystem_name);
-  } else if (time_since_ns != 0 || time_until_ns != 0) {
-    if (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX)) {
-      empty_query =
-          "SELECT %s,\"subsystem\" FROM \"%s\" "
-          "WHERE \"time\" >= %llu AND \"time\" <= %llu";
-    } else {
-      empty_query =
-          "SELECT %s FROM \"%s\" WHERE "
-          "\"time\" >= %llu AND \"time\" <= %llu";
-    }
-    snprintf(query, 256, empty_query, select_value, measurement_name, time_since_ns,
-             time_until_ns);
+  if (time_since_ns == 0 && time_until_ns == 0){
+    time_constraint[0] = '\0';  // empty string
+  } else if (time_since_ns != 0 && time_until_ns != 0){
+    snprintf(time_constraint, 64, "\"time\" >= %llu AND \"time\" <= %llu",
+             time_since_ns, time_until_ns);
+  } else if (time_since_ns != 0){
+    snprintf(time_constraint, 64, "\"time\" >= %llu", time_since_ns);
   } else {
-    if (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX)) {
-      empty_query = "SELECT %s,\"subsystem\" FROM \"%s\"";
-    } else {
-      empty_query = "SELECT %s FROM \"%s\"";
-    }
-    snprintf(query, 256, empty_query, select_value, measurement_name);
+    // time_until_ns != 0
+    snprintf(time_constraint, 64, "\"time\" <= %llu", time_until_ns);
   }
+  // printf("time_constraint: %s\n", time_constraint);
+
+  char *measurement_ids = "";
+  if (timestamps != NULL){
+    measurement_ids = (char *)malloc(timestamps->length * 64 * sizeof(char));
+    snprintf(measurement_ids, 64, "\"measurement_id\" = \'%llu\'", *timestamps->ptr);
+    int i;
+    for (i = 1; i < timestamps->length; i++){
+      snprintf(measurement_ids + strlen(measurement_ids), 64,
+               " OR \"measurement_id\" = \'%llu\'", timestamps->ptr[i]); // append to the end
+    }
+  }
+  // printf("measurement_ids: %s\n", measurement_ids);
+
+  char *where_clause = "";
+  if (measurement_ids[0] != '\0' || time_constraint[0] != '\0' || subsystem_constraint[0] != '\0'){
+    int length_of_constraints = strlen(subsystem_constraint) +
+                                strlen(time_constraint) +
+                                strlen(measurement_ids) + 32;
+    where_clause = (char *)malloc(length_of_constraints * sizeof(char));
+    snprintf(where_clause, length_of_constraints, "WHERE");
+
+    if (subsystem_constraint[0] != '\0'){
+      snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
+               " %s", subsystem_constraint);
+    }
+
+    if (time_constraint[0] != '\0'){
+      if (strlen(where_clause) > 5){
+        // if there alreasy is a condition, add an AND
+        snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
+                 " AND %s", time_constraint);
+      } else {
+        snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
+                 " %s", time_constraint);
+      }
+    }
+
+    if (measurement_ids[0] != '\0'){
+      if (strlen(where_clause) > 5){
+        // if there alreasy is a condition, add an AND
+        snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
+                 " AND %s", measurement_ids);
+      } else {
+        snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
+                 " %s", measurement_ids);
+      }
+    }
+  }
+  // printf("where_clause: %s\n", where_clause);
+
+  char *empty_query;
+  char query[strlen(where_clause) + 128];
+
+  if (subsystem_name == NULL && (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX))) {
+    empty_query = "SELECT %s,\"subsystem\" FROM \"%s\" %s";
+  } else {
+    empty_query = "SELECT %s FROM \"%s\" %s";
+  }
+  snprintf(query, strlen(where_clause) + 128, empty_query, select_clause, measurement_name, where_clause);
+  printf("query: %s\n", query);
   char *response = rscfl_query_measurements(rhdl, query);
 
   return response;

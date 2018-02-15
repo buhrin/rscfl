@@ -66,24 +66,24 @@ int main(int argc, char** argv) {
   /*
    * Advanced queries
    */
-  // query_result_t *result;
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, 1517262516171014, 0)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, 1517262516171014)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, 0, 1517262516171014)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem")
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", 1517262516171014, 0)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", 1517262516171014)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", 0, 1517262516171014)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, 1517262516171014, 0)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", 1517262516171014, 0)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, 0, 1517262516171014)
-  // ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", 0, 1517262516171014)
+  query_result_t *result;
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL)
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, 1517262516171014, 0)
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, 1517262516171014)
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, NULL, 0, 1517262516171014)
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem")
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", 1517262516171014, 0)
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", 1517262516171014)
+  ADVANCED_QUERY_PRINT("cpu.cycles", COUNT, "Filesystem", 0, 1517262516171014)
+  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, 1517262516171014, 0)
+  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", 1517262516171014, 0)
+  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, NULL, 0, 1517262516171014)
+  ADVANCED_QUERY_PRINT("cpu.cycles", MAX, "Filesystem", 0, 1517262516171014)
 
-  char *result = rscfl_advanced_query(rhdl, "cpu.cycles", NULL);
-  if (result != NULL){
-    printf("%s\n", result);
-    free(result);
+  char *result_no_function = rscfl_advanced_query(rhdl, "cpu.cycles", NULL);
+  if (result_no_function != NULL){
+    printf("%s\n", result_no_function);
+    free(result_no_function);
   } else {
     fprintf(stderr, "result from advanced query is null\n");
   }
@@ -92,13 +92,22 @@ int main(int argc, char** argv) {
   // printf("data:\n%s\n", extra_data);
   // rscfl_free_json(extra_data);
 
-  // timestamp_array_t array;
-  // array = rscfl_get_timestamps(rhdl, "{\"extra_data\":\"yes\"}");
-  // int i;
-  // for(i = 0; i < array.length; i++){
-  //   printf("timestamp %d: %llu\n", i, array.ptr[i]);
-  // }
-  // rscfl_free_timestamp_array(array);
+  timestamp_array_t array;
+  array = rscfl_get_timestamps(rhdl, "{\"extra_data\":\"yes\"}");
+  int i;
+  for(i = 0; i < array.length; i++){
+    printf("timestamp %d: %llu\n", i, array.ptr[i]);
+  }
+
+  char *timestamps_result = rscfl_build_advanced_query(rhdl, "cpu.cycles", NULL, "Filesystem", 1518723910053262, 0, &array);
+  if (timestamps_result != NULL){
+    printf("timestamps_result: %s\n", timestamps_result);
+    free(timestamps_result);
+  } else {
+    fprintf(stderr, "timestamps_result is null\n");
+  }
+
+  rscfl_free_timestamp_array(array);
 
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;

@@ -439,6 +439,13 @@ timestamp_array_t rscfl_get_timestamps(rscfl_handle rhdl, char *extra_data);
  */
 #define rscfl_free_timestamp_array(array) free(array.ptr)
 
+// temporarily here for testing
+char *rscfl_build_advanced_query(rscfl_handle rhdl, char *measurement_name,
+                                  char *function, char *subsystem_name,
+                                  unsigned long long time_since_us,
+                                  unsigned long long time_until_us,
+                                  timestamp_array_t *timestamps);
+
 /*
  * -- high level API functions --
  */
