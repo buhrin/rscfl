@@ -383,33 +383,53 @@ bool rscfl_get_next_json(mongoc_cursor_t *cursor, char **string);
  * the query_result_t * returned by this function then belongs to
  * the calling function and needs to be freed using rscfl_free_query_result()
  */
-#define rscfl_advanced_query_with_function(...)\
-  CONCAT(rscfl_advanced_query_with_function_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_advanced_query_with_function_4(handle, measurement_name, function, subsystem_name) \
-  rscfl_advanced_query_with_function_api(handle, measurement_name, function, subsystem_name, 0, 0)
-#define rscfl_advanced_query_with_function_5(handle, measurement_name, function, subsystem_name, timestamp) \
-  rscfl_advanced_query_with_function_api(handle, measurement_name, function, subsystem_name, timestamp, timestamp)
-#define rscfl_advanced_query_with_function_6(handle, measurement_name, function, subsystem_name, time_since, time_until) \
-  rscfl_advanced_query_with_function_api(handle, measurement_name, function, subsystem_name, time_since, time_until)
-query_result_t *rscfl_advanced_query_with_function_api(rscfl_handle rhdl,
-    char *measurement_name, char *function, char *subsystem_name,
+#define rscfl_advanced_query_with_function(...)                      \
+  CONCAT(rscfl_advanced_query_with_function_, VARGS_NR(__VA_ARGS__)) \
+  (__VA_ARGS__)
+#define rscfl_advanced_query_with_function_6(                                  \
+    handle, measurement_name, function, subsystem_name, extra_data, latest_n)  \
+  rscfl_advanced_query_with_function_api(handle, measurement_name, function,   \
+                                         subsystem_name, extra_data, latest_n, \
+                                         0, 0)
+#define rscfl_advanced_query_with_function_7(handle, measurement_name,         \
+                                             function, subsystem_name,         \
+                                             extra_data, latest_n, timestamp)  \
+  rscfl_advanced_query_with_function_api(handle, measurement_name, function,   \
+                                         subsystem_name, extra_data, latest_n, \
+                                         timestamp, timestamp)
+#define rscfl_advanced_query_with_function_8(                                  \
+    handle, measurement_name, function, subsystem_name, extra_data, latest_n,  \
+    time_since, time_until)                                                    \
+  rscfl_advanced_query_with_function_api(handle, measurement_name, function,   \
+                                         subsystem_name, extra_data, latest_n, \
+                                         time_since, time_until)
+query_result_t *rscfl_advanced_query_with_function_api(
+    rscfl_handle rhdl, char *measurement_name, char *function,
+    char *subsystem_name, char *extra_data, int latest_n,
     unsigned long long time_since_us, unsigned long long time_until_us);
 
 /*
  * the char * returned by this function then belongs to
  * the calling function and needs to be freed using free()
  */
-#define rscfl_advanced_query(...)\
+#define rscfl_advanced_query(...) \
   CONCAT(rscfl_advanced_query_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_advanced_query_3(handle, measurement_name, subsystem_name) \
-  rscfl_advanced_query_api(handle, measurement_name, subsystem_name, 0, 0)
-#define rscfl_advanced_query_4(handle, measurement_name, subsystem_name, timestamp) \
-  rscfl_advanced_query_api(handle, measurement_name, subsystem_name, timestamp, timestamp)
-#define rscfl_advanced_query_5(handle, measurement_name, subsystem_name, time_since, time_until) \
-  rscfl_advanced_query_api(handle, measurement_name, subsystem_name, time_since, time_until)
+#define rscfl_advanced_query_5(handle, measurement_name, subsystem_name, \
+                               extra_data, latest_n)                     \
+  rscfl_advanced_query_api(handle, measurement_name, subsystem_name,     \
+                           extra_data, latest_n, 0, 0)
+#define rscfl_advanced_query_6(handle, measurement_name, subsystem_name, \
+                               extra_data, latest_n, timestamp)          \
+  rscfl_advanced_query_api(handle, measurement_name, subsystem_name,     \
+                           extra_data, latest_n, timestamp, timestamp)
+#define rscfl_advanced_query_7(handle, measurement_name, subsystem_name,     \
+                               extra_data, latest_n, time_since, time_until) \
+  rscfl_advanced_query_api(handle, measurement_name, subsystem_name,         \
+                           extra_data, latest_n, time_since, time_until)
 char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
-    char *subsystem_name, unsigned long long time_since_us,
-    unsigned long long time_until_us);
+                               char *subsystem_name, char *extra_data,
+                               int latest_n, unsigned long long time_since_us,
+                               unsigned long long time_until_us);
 
 /*
  * used to free the query_result_t * returned by rscfl_advanced_query()
@@ -438,13 +458,6 @@ timestamp_array_t rscfl_get_timestamps(rscfl_handle rhdl, char *extra_data);
  * used to free the timestamp_array_t returned by rscfl_get_timestamps()
  */
 #define rscfl_free_timestamp_array(array) free(array.ptr)
-
-// temporarily here for testing
-char *rscfl_build_advanced_query(rscfl_handle rhdl, char *measurement_name,
-                                  char *function, char *subsystem_name,
-                                  unsigned long long time_since_us,
-                                  unsigned long long time_until_us,
-                                  timestamp_array_t *timestamps);
 
 /*
  * -- high level API functions --

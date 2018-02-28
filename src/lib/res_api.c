@@ -77,6 +77,7 @@ static void influxDB_cleanup(rscfl_handle rhdl);
 static void mongoDB_cleanup(rscfl_handle rhdl);
 static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                                   char *function, char *subsystem_name,
+                                  int latest_n,
                                   unsigned long long time_since_us,
                                   unsigned long long time_until_us,
                                   timestamp_array_t *timestamps);
@@ -827,16 +828,29 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
 }
 
 query_result_t *rscfl_advanced_query_with_function_api(rscfl_handle rhdl,
-    char *measurement_name, char *function, char *subsystem_name,
-    unsigned long long time_since_us, unsigned long long time_until_us)
+                                                       char *measurement_name,
+                                                       char *function,
+                                                       char *subsystem_name,
+                                                       char *extra_data,
+                                                       int latest_n,
+                                                       unsigned long long time_since_us,
+                                                       unsigned long long time_until_us)
 {
   if (rhdl == NULL || measurement_name == NULL || function == NULL){
     fprintf(stderr, "Can't perform special query with function, some parameters are missing.\n");
     return NULL;
   }
 
-  char *response = build_advanced_query(rhdl, measurement_name, function, subsystem_name,
-                                        time_since_us, time_until_us, NULL);
+  char *response;
+  if (extra_data != NULL){
+    timestamp_array_t array = rscfl_get_timestamps(rhdl, extra_data);
+    response = build_advanced_query(rhdl, measurement_name, function, subsystem_name,
+                                    latest_n, time_since_us, time_until_us, &array);
+  } else {
+    response = build_advanced_query(rhdl, measurement_name, function, subsystem_name,
+                                    latest_n, time_since_us, time_until_us, NULL);
+  }
+
   cJSON *response_json;
   if (response == NULL){
     return NULL;
@@ -902,8 +916,11 @@ error:
 }
 
 char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
-    char *subsystem_name, unsigned long long time_since_us,
-    unsigned long long time_until_us)
+                               char *subsystem_name,
+                               char *extra_data,
+                               int latest_n,
+                               unsigned long long time_since_us,
+                               unsigned long long time_until_us)
 {
   if (rhdl == NULL || measurement_name == NULL) {
     fprintf(stderr,
@@ -912,8 +929,16 @@ char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
     return NULL;
   }
 
-  char *response = build_advanced_query(rhdl, measurement_name, NULL, subsystem_name,
-                                        time_since_us, time_until_us, NULL);
+  char *response;
+  if (extra_data != NULL){
+    timestamp_array_t array = rscfl_get_timestamps(rhdl, extra_data);
+    response = build_advanced_query(rhdl, measurement_name, NULL, subsystem_name,
+                                    latest_n, time_since_us, time_until_us, &array);
+  } else {
+    response = build_advanced_query(rhdl, measurement_name, NULL, subsystem_name,
+                                    latest_n, time_since_us, time_until_us, NULL);
+  }
+
   cJSON *response_json;
   if (response == NULL) {
     return NULL;
@@ -952,16 +977,6 @@ void rscfl_free_query_result(query_result_t *result)
     free(result);
   }
   return;
-}
-
-char *rscfl_build_advanced_query(rscfl_handle rhdl, char *measurement_name,
-                                  char *function, char *subsystem_name,
-                                  unsigned long long time_since_us,
-                                  unsigned long long time_until_us,
-                                  timestamp_array_t *timestamps)
-{
-  return build_advanced_query(rhdl, measurement_name, function, subsystem_name,
-                                  time_since_us, time_until_us, timestamps);
 }
 
 char *rscfl_get_extra_data(rscfl_handle rhdl, unsigned long long timestamp)
@@ -1746,6 +1761,7 @@ static void mongoDB_cleanup(rscfl_handle rhdl)
 
 static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                                   char *function, char *subsystem_name,
+                                  int latest_n,
                                   unsigned long long time_since_us,
                                   unsigned long long time_until_us,
                                   timestamp_array_t *timestamps)
@@ -1766,19 +1782,19 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
   }
   // printf("subsystem_constraint: %s\n", subsystem_constraint);
 
-  char time_constraint[64];
+  char time_constraint[128];
   unsigned long long time_since_ns = time_since_us * 1000;
   unsigned long long time_until_ns = time_until_us * 1000;
   if (time_since_ns == 0 && time_until_ns == 0){
     time_constraint[0] = '\0';  // empty string
   } else if (time_since_ns != 0 && time_until_ns != 0){
-    snprintf(time_constraint, 64, "\"time\" >= %llu AND \"time\" <= %llu",
+    snprintf(time_constraint, 128, "\"time\" >= %llu AND \"time\" <= %llu",
              time_since_ns, time_until_ns);
   } else if (time_since_ns != 0){
-    snprintf(time_constraint, 64, "\"time\" >= %llu", time_since_ns);
+    snprintf(time_constraint, 128, "\"time\" >= %llu", time_since_ns);
   } else {
     // time_until_ns != 0
-    snprintf(time_constraint, 64, "\"time\" <= %llu", time_until_ns);
+    snprintf(time_constraint, 128, "\"time\" <= %llu", time_until_ns);
   }
   // printf("time_constraint: %s\n", time_constraint);
 
@@ -1798,9 +1814,9 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
   if (measurement_ids[0] != '\0' || time_constraint[0] != '\0' || subsystem_constraint[0] != '\0'){
     int length_of_constraints = strlen(subsystem_constraint) +
                                 strlen(time_constraint) +
-                                strlen(measurement_ids) + 32;
+                                strlen(measurement_ids) + 16;
     where_clause = (char *)malloc(length_of_constraints * sizeof(char));
-    snprintf(where_clause, length_of_constraints, "WHERE");
+    snprintf(where_clause, length_of_constraints, " WHERE");
 
     if (subsystem_constraint[0] != '\0'){
       snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
@@ -1808,7 +1824,7 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
     }
 
     if (time_constraint[0] != '\0'){
-      if (strlen(where_clause) > 5){
+      if (strlen(where_clause) > 6){
         // if there alreasy is a condition, add an AND
         snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
                  " AND %s", time_constraint);
@@ -1819,8 +1835,8 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
     }
 
     if (measurement_ids[0] != '\0'){
-      if (strlen(where_clause) > 5){
-        // if there alreasy is a condition, add an AND
+      if (strlen(where_clause) > 6){
+        // if there already is a condition, add an AND
         snprintf(where_clause + strlen(where_clause), length_of_constraints - strlen(where_clause),
                  " AND %s", measurement_ids);
       } else {
@@ -1830,18 +1846,30 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
     }
   }
   // printf("where_clause: %s\n", where_clause);
+  char order_clause[64] = {0};
+  if (latest_n != 0){
+    snprintf(order_clause, 64, " ORDER BY time DESC LIMIT %d", latest_n);
+  }
+  // printf("order_clause: %s\n", order_clause);
 
   char *empty_query;
-  char query[strlen(where_clause) + 128];
+  int query_length = strlen(where_clause) + strlen(measurement_name) +
+                     strlen(select_clause) + strlen(order_clause) + 32;
+  char query[query_length];
 
   if (subsystem_name == NULL && (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX))) {
-    empty_query = "SELECT %s,\"subsystem\" FROM \"%s\" %s";
+    empty_query = "SELECT %s,\"subsystem\" FROM \"%s\"%s%s";
   } else {
-    empty_query = "SELECT %s FROM \"%s\" %s";
+    empty_query = "SELECT %s FROM \"%s\"%s%s";
   }
-  snprintf(query, strlen(where_clause) + 128, empty_query, select_clause, measurement_name, where_clause);
+  snprintf(query, query_length, empty_query, select_clause, measurement_name,
+           where_clause, order_clause);
   printf("query: %s\n", query);
   char *response = rscfl_query_measurements(rhdl, query);
+
+  if (subsystem_constraint[0] != '\0') free(subsystem_constraint);
+  if (measurement_ids[0] != '\0') free(measurement_ids);
+  if (where_clause[0] != '\0') free(where_clause);
 
   return response;
 }
