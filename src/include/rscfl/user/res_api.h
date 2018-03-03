@@ -336,20 +336,43 @@ int rscfl_acct_api(rscfl_handle, rscfl_token *token, interest_flags fl);
 int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_token *token);
 
 /*
- * the subsys_idx_set * then belongs to the function and may be freed at any time.
- * Do not try to use it after calling this function. If you need it, copy it somewhere beforehand.
+ * Used to generate an ID for a measurement when calling rscfl_store_data(), or
+ * to generate a timestamp that can later be used as an upper or lower bound
+ * for the time when making a query
  */
-#define rscfl_store_data(...) CONCAT(rscfl_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_store_data_2(handle, data) rscfl_store_data_api(handle, data, 0)
-#define rscfl_store_data_3(handle, data, timestamp) rscfl_store_data_api(handle, data, timestamp)
-int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp);
+static unsigned long long get_timestamp(void);
 
-#define rscfl_read_and_store_data(...) CONCAT(rscfl_read_and_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_read_and_store_data_1(handle) rscfl_read_and_store_data_api(handle, NULL)
-#define rscfl_read_and_store_data_2(handle, extra_data) rscfl_read_and_store_data_api(handle, extra_data)
+/*
+ * the subsys_idx_set * then belongs to the function and may be freed at any
+ * time. Do not try to use it after calling this function. If you need it, copy
+ * it somewhere beforehand.
+ */
+#define rscfl_store_data(...) \
+  CONCAT(rscfl_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_store_data_2(handle, data) rscfl_store_data_api(handle, data, 0)
+#define rscfl_store_data_3(handle, data, timestamp) \
+  rscfl_store_data_api(handle, data, timestamp)
+int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data,
+                         unsigned long long timestamp);
+
+#define rscfl_read_and_store_data(...) \
+  CONCAT(rscfl_read_and_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_read_and_store_data_1(handle) \
+  rscfl_read_and_store_data_api(handle, NULL)
+#define rscfl_read_and_store_data_2(handle, extra_data) \
+  rscfl_read_and_store_data_api(handle, extra_data)
 int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json);
 
-int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, char *info_json);
+#define rscfl_store_data_with_extra_info(...) \
+  CONCAT(rscfl_store_data_with_extra_info_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_store_data_with_extra_info_3(handle, data, extra_info) \
+  rscfl_store_data_with_extra_info_api(handle, data, extra_info, 0)
+#define rscfl_store_data_with_extra_info_4(handle, data, extra_info, \
+                                           timestamp)                \
+  rscfl_store_data_with_extra_info_api(handle, data, extra_info, timestamp)
+int rscfl_store_data_with_extra_info_api(rscfl_handle rhdl,
+                                         subsys_idx_set *data, char *info_json,
+                                         unsigned long long timestamp);
 
 /*
  * the char * returned by this function then belongs to the calling

@@ -29,19 +29,19 @@ int main(int argc, char** argv) {
   /*
    * Storing data into database
    */
-  // int err;
-  // struct accounting acct;
+  int err;
+  struct accounting acct;
+
+  err = rscfl_acct(rhdl);
+  if(err) fprintf(stderr, "Error accounting for system call 1 [interest]\n");
+  FILE *fp = fopen("rscfl_file", "w");
+
+  rscfl_read_and_store_data(rhdl, "{\"extra_data\":\"no\"}");
 
   // err = rscfl_acct(rhdl);
-  // if(err) fprintf(stderr, "Error accounting for system call 1 [interest]\n");
-  // FILE *fp = fopen("rscfl_file", "w");
-
-  // rscfl_read_and_store_data(rhdl, "{\"extra_data\":\"yes\"}");
-
-  // // err = rscfl_acct(rhdl);
-  // // if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
-  // // rscfl_read_and_store_data(rhdl);
-  // fclose(fp);
+  // if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
+  // rscfl_read_and_store_data(rhdl);
+  fclose(fp);
 
   /*
    * Querying database
@@ -91,9 +91,9 @@ int main(int argc, char** argv) {
   // char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
   // printf("data:\n%s\n", extra_data);
   // rscfl_free_json(extra_data);
-
+  sleep(2);
   char* result = rscfl_advanced_query(rhdl, "cpu.cycles", NULL,
-                                      "{\"extra_data\":\"yes\"}", 5);
+                                      "{\"extra_data\":\"no\"}", 5);
   if (result) printf("\nresult:%s\n", result);
 
   rscfl_persistent_storage_cleanup(rhdl);

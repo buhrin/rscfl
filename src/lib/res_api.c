@@ -69,7 +69,6 @@ static bool connect_to_mongoDB(char *app_name, mongo_handle_t *mongo);
 static int store_measurements(rscfl_handle rhdl, char *measurements);
 static int store_extra_data(rscfl_handle rhdl, char *json);
 static char *escape_spaces(const char *string);
-static unsigned long long get_timestamp(void);
 static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void *userp);
 static void *influxDB_sender(void *param);
 static void *mongoDB_sender(void *param);
@@ -622,16 +621,32 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   return -EINVAL;
 }
 
-int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long long timestamp)
+unsigned long long get_timestamp(void)
+{
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return tv.tv_sec * (unsigned long long)1000000 + tv.tv_usec;
+}
+
+int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, 
+                         unsigned long long timestamp)
 {
   if (data == NULL || rhdl == NULL){
     fprintf(stderr, "Can't store data since data pointer or rscfl_handle is null.\n");
+    if (data != NULL){
+      free_subsys_idx_set(data);
+    }
     return -1;
+  }
+
+  if (timestamp == 0) {
+    timestamp = get_timestamp();
   }
 
   if (rhdl->influx.pipe_write == -1){
     fprintf(stderr, "Measurement with timestamp %llu not stored because "
                     "persistent storage is disabled.\n", timestamp);
+    free_subsys_idx_set(data);
     return -1;
   }
 
@@ -639,18 +654,16 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long 
     struct influxDB_data buffer;
     int bytes, sent, total;
     buffer.data = data;
-    if (timestamp != 0){
-      buffer.timestamp = timestamp;
-    } else {
-      buffer.timestamp = get_timestamp();
-    }
+    buffer.timestamp = timestamp;
     total = sizeof(struct influxDB_data);
     sent = 0;
     do
     {
       bytes = write(rhdl->influx.pipe_write, &buffer + sent, total - sent);
       if (bytes < 0){
-        perror("ERROR writing measurements to pipe.");
+        perror("ERROR writing measurements to pipe. Disabling persistent storage.");
+        free_subsys_idx_set(data);
+        rscfl_persistent_storage_cleanup(rhdl);
         return -1;
       }
       sent += bytes;
@@ -661,6 +674,7 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data, unsigned long 
                     "measurements will not be stored. It is also possible that "
                     "some measurements that were in a queue waiting to get sent "
                     "also weren't stored. Disabling persistent storage.\n", timestamp);
+    free_subsys_idx_set(data);
     rscfl_persistent_storage_cleanup(rhdl);
   }
   return 0;
@@ -678,18 +692,21 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
     if (info_json != NULL){
       err = rscfl_store_data_with_extra_info(rhdl, data, info_json);
     } else {
-      unsigned long long timestamp = get_timestamp();
-      err = rscfl_store_data(rhdl, data, timestamp);
+      err = rscfl_store_data(rhdl, data);
     }
     if(err) fprintf(stderr, "Error accounting for system call [data store into DB]\n");
   }
   return err;
 }
 
-int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, char *info_json)
+int rscfl_store_data_with_extra_info_api(rscfl_handle rhdl,
+                                         subsys_idx_set *data, char *info_json,
+                                         unsigned long long timestamp)
 {
   int bytes, sent, total;
-  unsigned long long timestamp = get_timestamp();
+  if (timestamp == 0){
+    timestamp = get_timestamp();
+  }
 
   if (rscfl_store_data(rhdl, data, timestamp)) {
     fprintf(stderr, "Extra data for timestamp %llu not stored because storage "
@@ -714,7 +731,9 @@ int rscfl_store_data_with_extra_info(rscfl_handle rhdl, subsys_idx_set *data, ch
     {
       bytes = write(rhdl->mongo.pipe_write, &extra_data + sent, total - sent);
       if (bytes < 0){
-        perror("ERROR writing extra data to pipe.");
+        perror("ERROR writing extra data to pipe. Disabling storage of extra data.");
+        free(extra_data);
+        mongoDB_cleanup(rhdl);
         return -1;
       }
       sent += bytes;
@@ -1583,13 +1602,6 @@ static char *escape_spaces(const char *string)
   return new_string;
 }
 
-static unsigned long long get_timestamp(void)
-{
-  struct timeval tv;
-  gettimeofday(&tv,NULL);
-  return tv.tv_sec*(unsigned long long)1000000+tv.tv_usec;
-}
-
 static size_t data_read_callback(void *contents, size_t size, size_t nmemb, void *userp)
 {
   size_t realsize = size * nmemb;
@@ -1654,9 +1666,12 @@ static void *influxDB_sender(void *param)
         if(strlen(subsystem_metrics) > measurements_remaining_length){
           err = store_measurements(rhdl, measurements);
           if (err){
-            fprintf(stderr, "Failed to store measurements, influxDB sender thread will now exit.\n");
+            rhdl->influx.thread_alive = false;
+            fprintf(stderr,
+                    "Failed to store measurements, enqueuing of more data has "
+                    "been disabled. Attempting to store and free remaining "
+                    "resources in the pipe.\n");
             free_subsys_idx_set(data);
-            goto exit;
           }
           printf("sent:%s\n",measurements);
           memset(measurements, 0, MEASUREMENTS_BUFFER_SIZE);
@@ -1671,8 +1686,11 @@ static void *influxDB_sender(void *param)
       free_subsys_idx_set(data);
       err = store_measurements(rhdl, measurements);
       if (err){
-        fprintf(stderr, "Failed to store measurements, influxDB sender thread will now exit.\n");
-        goto exit;
+        rhdl->influx.thread_alive = false;
+        fprintf(stderr,
+                "Failed to store measurements, enqueuing of more data has "
+                "been disabled. Attempting to store and free remaining "
+                "resources in the pipe.\n");
       }
       printf("sent:%s\n",measurements);
     }
@@ -1699,7 +1717,13 @@ static void *mongoDB_sender(void *param)
       received == 0;
       err = store_extra_data(rhdl, str);
       free(str);
-      if (err) break;
+      if (err){
+        rhdl->mongo.thread_alive = false;
+        fprintf(stderr,
+                "Failed to store extra data, enqueuing of more data has "
+                "been disabled. Attempting to store and free remaining "
+                "resources in the pipe.\n");
+      }
     }
   }
   if (bytes == 0){
@@ -1799,7 +1823,7 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
   // printf("time_constraint: %s\n", time_constraint);
 
   char *measurement_ids = "";
-  if (timestamps != NULL){
+  if (timestamps != NULL && timestamps->ptr != NULL){
     measurement_ids = (char *)malloc(timestamps->length * 64 * sizeof(char));
     snprintf(measurement_ids, 64, "\"measurement_id\" = \'%llu\'", *timestamps->ptr);
     int i;
