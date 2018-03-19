@@ -387,12 +387,13 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query);
 mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *options);
 
 /*
- * the string parameter gets allocated memory, and needs to be freed with bson_free()
- * when the program is done using it, or before using rscfl_get_next_json() again.
- * The correct way to use this function is in a loop as follows:
- *  char *string;
- *  while (rscfl_get_next_json(cursor, &string)){
- *    // do something with the string (transform into json and parse, or strcpy somewhere else)
+ * the string parameter gets allocated memory, and needs to be freed with
+ * rscfl_free_json() when the program is done using it. The correct way to use
+ * this function is in a loop as follows: 
+ * char *string; 
+ * while (rscfl_get_next_json(cursor, &string)){
+ *    // do something with the string (transform into json and parse, or strcpy
+ *       somewhere else)
  *    ...
  *    rscfl_free_json(string);
  *  }

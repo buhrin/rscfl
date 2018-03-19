@@ -766,7 +766,7 @@ char *rscfl_query_measurements(rscfl_handle rhdl, char *query)
     snprintf(url, 64, "http://localhost:8086/query?db=%s&epoch=u", rhdl->app_name);
 
     /* Initialise the return string */
-    str.ptr = malloc(1);  /* will be grown as needed by the realloc above */
+    str.ptr = malloc(1);  /* will be grown as needed by the realloc in the data_read_callback function */
     if (str.ptr == NULL) {
       fprintf(stderr, "Can't query measurements because malloc failed to allocate a buffer for incoming data.\n");
       return NULL;
@@ -943,8 +943,8 @@ char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
 {
   if (rhdl == NULL || measurement_name == NULL) {
     fprintf(stderr,
-            "Can't perform special query with function, some parameters are "
-            "missing.\n");
+            "Can't perform special query because rscfl handle or "
+            "measurement_name is null.\n");
     return NULL;
   }
 
@@ -1790,30 +1790,37 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                                   unsigned long long time_until_us,
                                   timestamp_array_t *timestamps)
 {
-  char select_clause[32];
+  char select_clause[32] = {0};
   if (function == NULL){
     snprintf(select_clause, 32, "\"value\"");
   } else {
     snprintf(select_clause, 32, "%s(\"value\")", function);
   }
+  if (subsystem_name == NULL && (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX))) {
+    strncat(select_clause, ",\"subsystem\"", 32 - strlen(select_clause))
+  } 
   // printf("\n\nselect_clause: %s\n", select_clause);
 
   char *subsystem_constraint = "";
   if (subsystem_name != NULL) {
     subsystem_constraint = (char *)malloc((strlen(subsystem_name) + 32)*sizeof(char));
     snprintf(subsystem_constraint, strlen(subsystem_name) + 32,
-             "\"subsystem\" =~ /%s/", subsystem_name);
+             "\"subsystem\" = \'%s\'", subsystem_name);
   }
   // printf("subsystem_constraint: %s\n", subsystem_constraint);
 
-  char time_constraint[128];
+  char time_constraint[128] = {0};
   unsigned long long time_since_ns = time_since_us * 1000;
   unsigned long long time_until_ns = time_until_us * 1000;
   if (time_since_ns == 0 && time_until_ns == 0){
     time_constraint[0] = '\0';  // empty string
   } else if (time_since_ns != 0 && time_until_ns != 0){
-    snprintf(time_constraint, 128, "\"time\" >= %llu AND \"time\" <= %llu",
-             time_since_ns, time_until_ns);
+    if (time_since_ns == time_until_ns){
+      snprintf(time_constraint, 128, "\"time\" = %llu", time_since_ns);
+    } else {
+      snprintf(time_constraint, 128, "\"time\" >= %llu AND \"time\" <= %llu",
+               time_since_ns, time_until_ns);
+    }
   } else if (time_since_ns != 0){
     snprintf(time_constraint, 128, "\"time\" >= %llu", time_since_ns);
   } else {
@@ -1878,11 +1885,13 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
 
   char *empty_query;
   int query_length = strlen(where_clause) + strlen(measurement_name) +
-                     strlen(select_clause) + strlen(order_clause) + 32;
+                     strlen(select_clause) + strlen(order_clause) + 128;
   char query[query_length];
 
-  if (subsystem_name == NULL && (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX))) {
-    empty_query = "SELECT %s,\"subsystem\" FROM \"%s\"%s%s";
+  if (function != NULL && latest_n != 0) {
+    empty_query =
+        "SELECT %s FROM (SELECT \"value\",\"subsystem\" FROM \"%s\"%s%s) ORDER "
+        "BY time DESC";
   } else {
     empty_query = "SELECT %s FROM \"%s\"%s%s";
   }
