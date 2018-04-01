@@ -29,19 +29,42 @@ int main(int argc, char** argv) {
   /*
    * Storing data into database
    */
-  int err;
+  int err, i;
   struct accounting acct;
+  rscfl_token *tkn;
 
-  err = rscfl_acct(rhdl);
-  if(err) fprintf(stderr, "Error accounting for system call 1 [interest]\n");
-  FILE *fp = fopen("rscfl_file", "w");
+  // simple example with no token reuse
+  for (i = 0; i<3; i++){
+    // fopen
+    if (rscfl_get_token(rhdl, &tkn)){
+      fprintf(stderr, "Failed to get new token\n");
+      break;
+    }
+    err = rscfl_acct(rhdl, tkn, ACCT_START);
+    if (err)
+      fprintf(stderr, "Error accounting for system call 1 [interest], loop %d\n", i);
+    FILE* fp = fopen("rscfl_file", "w");
+    err = rscfl_acct(rhdl, tkn, TK_STOP_FL);
+    if (err)
+      fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fopen\"}");
 
-  rscfl_read_and_store_data(rhdl, "{\"extra_data\":\"no\"}");
+    // fclose
+    if (rscfl_get_token(rhdl, &tkn)){
+      fprintf(stderr, "Failed to get new token\n");
+      break;
+    }
+    err = rscfl_acct(rhdl, tkn, ACCT_START);
+    if (err)
+      fprintf(stderr, "Error accounting for system call 2 [interest], loop %d\n", i);
+    fclose(fp);
+    err = rscfl_acct(rhdl, tkn, TK_STOP_FL);
+    if (err)
+      fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fclose\"}");
 
-  // err = rscfl_acct(rhdl);
-  // if(err) fprintf(stderr, "Error accounting for system call 2 [interest]\n");
-  // rscfl_read_and_store_data(rhdl);
-  fclose(fp);
+    err = rscfl_acct(rhdl, tkn, ACCT_START);
+  }
 
   /*
    * Querying database

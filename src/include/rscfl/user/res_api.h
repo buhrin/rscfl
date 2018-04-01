@@ -87,12 +87,6 @@ extern "C" {
 /* array containing the user-friendly names of each subsystem */
 extern const char *rscfl_subsys_name[NUM_SUBSYSTEMS];
 
-typedef enum {
-  SW_TK_DEFAULT  = EBIT(0),
-  SW_TK_RESET    = EBIT(1),
-  SW_TK_NULL     = EBIT(2),
-} token_switch_flags;
-
 /*
  * Resourceful tokens allow us to track the resources consumed by a request
  * when it is not in the kernel. This can be in userspace or in the hypervisor.
@@ -283,8 +277,10 @@ rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config, char *app
 void rscfl_persistent_storage_cleanup(rscfl_handle rhdl);
 
 #define rscfl_get_handle(...) CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_get_handle_0() rscfl_get_handle_api(NULL)
-#define rscfl_get_handle_1(cfg) rscfl_get_handle_api(cfg)
+#define rscfl_get_handle_0() rscfl_get_handle_api(NULL, NULL, 0)
+#define rscfl_get_handle_1(cfg) rscfl_get_handle_api(cfg, NULL, 0)
+#define rscfl_get_handle_2(app_name, need_extra_data) rscfl_get_handle_api(NULL, app_name, need_extra_data)
+#define rscfl_get_handle_3(cfg, app_name, need_extra_data) rscfl_get_handle_api(cfg, app_name, need_extra_data)
 
 /**
  * Returns the rscfl handle for the current thread. If rscfl was not
@@ -298,7 +294,7 @@ void rscfl_persistent_storage_cleanup(rscfl_handle rhdl);
  * :type cfg:     rscfl_config*
  * :param token:  an inexistent token
  */
-rscfl_handle rscfl_get_handle_api(rscfl_config *cfg);
+rscfl_handle rscfl_get_handle_api(rscfl_config *cfg, char *app_name, bool need_extra_data);
 
 /*
  * If successful returns 0, and sets the value of *token to be a new token.
@@ -340,7 +336,7 @@ int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_toke
  * to generate a timestamp that can later be used as an upper or lower bound
  * for the time when making a query
  */
-static unsigned long long get_timestamp(void);
+unsigned long long get_timestamp(void);
 
 /*
  * the subsys_idx_set * then belongs to the function and may be freed at any
@@ -389,8 +385,8 @@ mongoc_cursor_t *rscfl_query_extra_data(rscfl_handle rhdl, char *query, char *op
 /*
  * the string parameter gets allocated memory, and needs to be freed with
  * rscfl_free_json() when the program is done using it. The correct way to use
- * this function is in a loop as follows: 
- * char *string; 
+ * this function is in a loop as follows:
+ * char *string;
  * while (rscfl_get_next_json(cursor, &string)){
  *    // do something with the string (transform into json and parse, or strcpy
  *       somewhere else)

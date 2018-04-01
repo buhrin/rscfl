@@ -126,6 +126,11 @@ typedef enum {
 
 } interest_flags;
 
+typedef enum {
+  SW_TK_DEFAULT = EBIT(0),
+  SW_TK_RESET = EBIT(1),
+  SW_TK_NULL = EBIT(2),
+} token_switch_flags;
 
 
 struct syscall_interest_t
