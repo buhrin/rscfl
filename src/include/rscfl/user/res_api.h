@@ -345,30 +345,53 @@ unsigned long long get_timestamp(void);
  */
 #define rscfl_store_data(...) \
   CONCAT(rscfl_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_store_data_2(handle, data) rscfl_store_data_api(handle, data, 0)
+#define rscfl_store_data_2(handle, data) \
+  rscfl_store_data_api(handle, data, 0, NULL, NULL)
 #define rscfl_store_data_3(handle, data, timestamp) \
-  rscfl_store_data_api(handle, data, timestamp)
+  rscfl_store_data_api(handle, data, timestamp, NULL, NULL)
+#define rscfl_store_data_4(handle, data, fn, params) \
+  rscfl_store_data_api(handle, data, 0, fn, params)
+#define rscfl_store_data_5(handle, data, timestamp, fn, params) \
+  rscfl_store_data_api(handle, data, timestamp, fn, params)
 int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data,
-                         unsigned long long timestamp);
+                         unsigned long long timestamp,
+                         void (*user_fn)(rscfl_handle, void *),
+                         void *user_params);
 
+/*
+ * Supply NULL into any unused parameter when calling with more than 1 argument
+ */
 #define rscfl_read_and_store_data(...) \
   CONCAT(rscfl_read_and_store_data_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_read_and_store_data_1(handle) \
   rscfl_read_and_store_data_api(handle, NULL)
-#define rscfl_read_and_store_data_2(handle, extra_data) \
-  rscfl_read_and_store_data_api(handle, extra_data)
-int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json);
+#define rscfl_read_and_store_data_5(handle, extra_data, token, fn, params) \
+  rscfl_read_and_store_data_api(handle, extra_data, token, fn, params)
+int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json,
+                                  rscfl_token *token,
+                                  void (*user_fn)(rscfl_handle, void *),
+                                  void *user_params);
 
 #define rscfl_store_data_with_extra_info(...) \
   CONCAT(rscfl_store_data_with_extra_info_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_store_data_with_extra_info_3(handle, data, extra_info) \
-  rscfl_store_data_with_extra_info_api(handle, data, extra_info, 0)
-#define rscfl_store_data_with_extra_info_4(handle, data, extra_info, \
-                                           timestamp)                \
-  rscfl_store_data_with_extra_info_api(handle, data, extra_info, timestamp)
+  rscfl_store_data_with_extra_info_api(handle, data, extra_info, 0, NULL, NULL)
+#define rscfl_store_data_with_extra_info_4(handle, data, extra_info,        \
+                                           timestamp)                       \
+  rscfl_store_data_with_extra_info_api(handle, data, extra_info, timestamp, \
+                                       NULL, NULL)
+#define rscfl_store_data_with_extra_info_5(handle, data, extra_info, fn, \
+                                           params)                       \
+  rscfl_store_data_with_extra_info_api(handle, data, extra_info, 0, fn, params)
+#define rscfl_store_data_with_extra_info_6(handle, data, extra_info,        \
+                                           timestamp, fn, params)           \
+  rscfl_store_data_with_extra_info_api(handle, data, extra_info, timestamp, \
+                                       fn, params)
 int rscfl_store_data_with_extra_info_api(rscfl_handle rhdl,
                                          subsys_idx_set *data, char *info_json,
-                                         unsigned long long timestamp);
+                                         unsigned long long timestamp,
+                                         void (*user_fn)(rscfl_handle, void *),
+                                         void *user_params);
 
 /*
  * the char * returned by this function then belongs to the calling

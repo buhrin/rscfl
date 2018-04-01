@@ -11,6 +11,15 @@
     printf("result was null\n");                                               \
   }
 
+void fn(rscfl_handle rhdl, void* p)
+{
+  rscfl_token *tkn = p;
+  if (tkn != NULL){
+    printf("Freeing token %d\n", tkn->id);
+    rscfl_free_token(rhdl, tkn);
+  }
+}
+
 int main(int argc, char** argv) {
   rscfl_handle rhdl;
 
@@ -31,39 +40,36 @@ int main(int argc, char** argv) {
    */
   int err, i;
   struct accounting acct;
-  rscfl_token *tkn;
+  rscfl_token *tkns[20] = {0};
 
-  // simple example with no token reuse
-  for (i = 0; i<3; i++){
+  for (i = 0; i < 10; i++){
     // fopen
-    if (rscfl_get_token(rhdl, &tkn)){
+    if (rscfl_get_token(rhdl, &(tkns[2*i]))){
       fprintf(stderr, "Failed to get new token\n");
       break;
     }
-    err = rscfl_acct(rhdl, tkn, ACCT_START);
+    err = rscfl_acct(rhdl, tkns[2*i], ACCT_START | TK_RESET_FL);
     if (err)
       fprintf(stderr, "Error accounting for system call 1 [interest], loop %d\n", i);
     FILE* fp = fopen("rscfl_file", "w");
-    err = rscfl_acct(rhdl, tkn, TK_STOP_FL);
+    err = rscfl_acct(rhdl, tkns[2*i], TK_STOP_FL);
     if (err)
       fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    rscfl_read_and_store_data(rhdl, "{\"function\":\"fopen\"}");
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fopen\"}", tkns[2*i], &fn, tkns[2*i]);
 
     // fclose
-    if (rscfl_get_token(rhdl, &tkn)){
+    if (rscfl_get_token(rhdl, &(tkns[2*i+1]))){
       fprintf(stderr, "Failed to get new token\n");
       break;
     }
-    err = rscfl_acct(rhdl, tkn, ACCT_START);
+    err = rscfl_acct(rhdl, tkns[2*i+1], ACCT_START | TK_RESET_FL);
     if (err)
       fprintf(stderr, "Error accounting for system call 2 [interest], loop %d\n", i);
     fclose(fp);
-    err = rscfl_acct(rhdl, tkn, TK_STOP_FL);
+    err = rscfl_acct(rhdl, tkns[2*i+1], TK_STOP_FL);
     if (err)
       fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    rscfl_read_and_store_data(rhdl, "{\"function\":\"fclose\"}");
-
-    err = rscfl_acct(rhdl, tkn, ACCT_START);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fclose\"}", tkns[2*i+1], &fn, tkns[2*i+1]);
   }
 
   /*

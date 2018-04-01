@@ -90,6 +90,8 @@ struct String{
 struct influxDB_data{
   subsys_idx_set *data;
   unsigned long long timestamp;
+  void (*function)(rscfl_handle, void *);
+  void *params;
 };
 
 // define subsystem name array for user-space includes of subsys_list.h
@@ -629,7 +631,9 @@ unsigned long long get_timestamp(void)
 }
 
 int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data,
-                         unsigned long long timestamp)
+                         unsigned long long timestamp,
+                         void (*user_fn)(rscfl_handle, void *),
+                         void *user_params)
 {
   if (data == NULL || rhdl == NULL){
     fprintf(stderr, "Can't store data since data pointer or rscfl_handle is null.\n");
@@ -655,6 +659,8 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data,
     int bytes, sent, total;
     buffer.data = data;
     buffer.timestamp = timestamp;
+    buffer.function = user_fn;
+    buffer.params = user_params;
     total = sizeof(struct influxDB_data);
     sent = 0;
     do
@@ -680,19 +686,23 @@ int rscfl_store_data_api(rscfl_handle rhdl, subsys_idx_set *data,
   return 0;
 }
 
-int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
+int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json,
+                                  rscfl_token *token,
+                                  void (*user_fn)(rscfl_handle, void *),
+                                  void *user_params)
 {
   struct accounting acct;
   int err;
-  err = rscfl_read_acct(rhdl, &acct);
+  err = rscfl_read_acct(rhdl, &acct, token);
   if(err){
     fprintf(stderr, "Error accounting for system call [data read]\n");
   } else {
     subsys_idx_set* data = rscfl_get_subsys(rhdl, &acct);
     if (info_json != NULL){
-      err = rscfl_store_data_with_extra_info(rhdl, data, info_json);
+      err = rscfl_store_data_with_extra_info(rhdl, data, info_json, user_fn,
+                                             user_params);
     } else {
-      err = rscfl_store_data(rhdl, data);
+      err = rscfl_store_data(rhdl, data, user_fn, user_params);
     }
     if(err) fprintf(stderr, "Error accounting for system call [data store into DB]\n");
   }
@@ -701,14 +711,16 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json)
 
 int rscfl_store_data_with_extra_info_api(rscfl_handle rhdl,
                                          subsys_idx_set *data, char *info_json,
-                                         unsigned long long timestamp)
+                                         unsigned long long timestamp,
+                                         void (*user_fn)(rscfl_handle, void *),
+                                         void *user_params)
 {
   int bytes, sent, total;
   if (timestamp == 0){
     timestamp = get_timestamp();
   }
 
-  if (rscfl_store_data(rhdl, data, timestamp)) {
+  if (rscfl_store_data(rhdl, data, timestamp, user_fn, user_params)) {
     fprintf(stderr, "Extra data for timestamp %llu not stored because storage "
                     "of the corresponding measurement failed.\n", timestamp);
     return -1;
@@ -1586,7 +1598,7 @@ static char *escape_spaces(const char *string)
 {
   if (string == NULL)
     return NULL;
-  char *new_string = malloc(2 * sizeof(char) * (strlen(string) + 1));
+  char *new_string = calloc(2 * (strlen(string) + 1), sizeof(char));
   char *new_string_iterator = new_string;
   for (; *string; ++string, ++new_string_iterator)
   {
@@ -1598,7 +1610,6 @@ static char *escape_spaces(const char *string)
       *new_string_iterator = *string;
     }
   }
-  new_string_iterator = 0; // null terminator
   return new_string;
 }
 
@@ -1628,6 +1639,8 @@ static void *influxDB_sender(void *param)
   struct influxDB_data buffer;
   unsigned long long timestamp;
   subsys_idx_set *data;
+  void (*user_function)(rscfl_handle, void *);
+  void *user_params;
   int bytes, total = sizeof(struct influxDB_data), received = 0;
   while((bytes = read(rhdl->influx.pipe_read, &buffer + received, total - received)) > 0) {
     received += bytes;
@@ -1635,6 +1648,8 @@ static void *influxDB_sender(void *param)
       received = 0;
       data = buffer.data;
       timestamp = buffer.timestamp;
+      user_function = buffer.function;
+      user_params = buffer.params;
 
       char metric[METRIC_BUFFER_SIZE] = {0};
       char subsystem_metrics[SUBSYSTEM_METRICS_BUFFER_SIZE] = {0};
@@ -1693,6 +1708,9 @@ static void *influxDB_sender(void *param)
                 "resources in the pipe.\n");
       }
       printf("sent:%s\n",measurements);
+      if (user_function != NULL){
+        user_function(rhdl, user_params);
+      }
     }
   }
   if (bytes == 0){
@@ -1714,7 +1732,7 @@ static void *mongoDB_sender(void *param)
   while((bytes = read(rhdl->mongo.pipe_read, &str + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
-      received == 0;
+      received = 0;
       err = store_extra_data(rhdl, str);
       free(str);
       if (err){
