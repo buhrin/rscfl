@@ -47,8 +47,8 @@ DEFINE_REDUCE_FUNCTION(wc, struct timespec)
 #define EQUAL(A, B) strncmp(A, B, strlen(B)) == 0
 #define EXTRACT_METRIC(metric_name, metric_value, modifier)                  \
   snprintf(metric, METRIC_BUFFER_SIZE,                                       \
-           "%s,measurement_id=%llu,subsystem=%s value=" modifier " %llu\n",  \
-           metric_name, timestamp, subsystem_name, metric_value, timestamp); \
+           "%s,subsystem=%s value=" modifier ",measurement_id=%llu\n",  \
+           metric_name, subsystem_name, metric_value, timestamp); \
   strncat(subsystem_metrics, metric, METRIC_BUFFER_SIZE);                    \
   memset(metric, 0, METRIC_BUFFER_SIZE);
 
@@ -458,11 +458,9 @@ int rscfl_free_token(rscfl_handle rhdl, rscfl_token *token)
     token->in_use = 0;
     rhdl->free_token_list = new_hd;
 
-    /*
-     *strncpy(dbg.msg, "FREE", 5);
-     *dbg.new_token_id = token->id;
-     *ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
-     */
+    strncpy(dbg.msg, "FREE", 5);
+    dbg.new_token_id = token->id;
+    ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
     return 0;
   }
   return 0;
@@ -472,7 +470,7 @@ int rscfl_acct_api(rscfl_handle rhdl, rscfl_token *token, interest_flags fl)
 {
   volatile syscall_interest_t *to_acct;
   //int old_token_id;
-  //rscfl_debug dbg;
+  rscfl_debug dbg;
   _Bool rst;
   if (rhdl == NULL) {
     return -EINVAL;
@@ -490,7 +488,7 @@ int rscfl_acct_api(rscfl_handle rhdl, rscfl_token *token, interest_flags fl)
   // Test if this should reset current persistent flags and make tokens behave as if
   // it's the first measurement. Maintain __ACCT_ERR if this has been set
   // kernel-side
-  rst = ((fl & TK_RESET_FL) != 0);
+  rst = ((fl & TK_RESET_FL) != 0 || (fl & ACCT_START) != 0);
   if(rst)
     to_acct->flags = (to_acct->flags & __ACCT_ERR) | (fl & __ACCT_FLAG_IS_PERSISTENT);
   else
@@ -525,9 +523,9 @@ int rscfl_acct_api(rscfl_handle rhdl, rscfl_token *token, interest_flags fl)
   }
 
   if((to_acct->flags & ACCT_STOP) != 0) {
-    to_acct->syscall_id = 0;
     to_acct->token_id = NULL_TOKEN; // need this to signal the scheduler
                                     // interposition not to record further data
+    to_acct->syscall_id = 0;
     to_acct->flags = ACCT_DEFAULT;
     return 0;
   } else if((to_acct->flags & ACCT_START) != 0) {
@@ -537,11 +535,9 @@ int rscfl_acct_api(rscfl_handle rhdl, rscfl_token *token, interest_flags fl)
   }
   rhdl->current_token = token;
 
-  /*
-   *strncpy(dbg.msg, "ACCT", 5);
-   *dbg.new_token_id = token->id;
-   *ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
-   */
+  strncpy(dbg.msg, "ACCT", 5);
+  dbg.new_token_id = token->id;
+  ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
   return 0;
 }
 
@@ -550,7 +546,7 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   int i = 0;
   unsigned short tk_id;
   rscfl_token_list *start;
-  //rscfl_debug dbg;
+  rscfl_debug dbg;
   if (rhdl == NULL || (rhdl->ctrl->interest.flags & __ACCT_ERR) != 0) {
     return -EINVAL;
   }
@@ -576,11 +572,9 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
             ((shared_acct->syscall_id == ID_RSCFL_IGNORE) && (shared_acct->token_id == tk_id))) {
           memcpy(acct, shared_acct, sizeof(struct accounting));
           shared_acct->in_use = 0;
-          /*
-           *strncpy(dbg.msg, "READ", 5);
-           *dbg.new_token_id = tk_id;
-           *ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
-           */
+          strncpy(dbg.msg, "READ", 5);
+          dbg.new_token_id = tk_id;
+          ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
           return shared_acct->rc;
         } else {
           shared_acct++;
@@ -601,11 +595,10 @@ int rscfl_read_acct_api(rscfl_handle rhdl, struct accounting *acct, rscfl_token 
   shared_acct = (struct accounting *)rhdl->buf;
   i = 0;
   printf("Was looking for token: %d\n", tk_id);
-  /*
-   *strncpy(dbg.msg, "RERR", 5);
-   *dbg.new_token_id = tk_id;
-   *ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
-   */
+
+  strncpy(dbg.msg, "RERR", 5);
+  dbg.new_token_id = tk_id;
+  ioctl(rhdl->fd_ctrl, RSCFL_DEBUG_CMD, &dbg);
   while (i < STRUCT_ACCT_NUM) {
     printf("acct use:%d, syscall:%lu, tk_id:%d, subsys_nr:%d\n",
         shared_acct->in_use, shared_acct->syscall_id, shared_acct->token_id, shared_acct->nr_subsystems);
@@ -1647,7 +1640,7 @@ static void *influxDB_sender(void *param)
   while((bytes = read(rhdl->influx.pipe_read, &buffer + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
-      unsigned long long start = get_timestamp();
+      // unsigned long long start = get_timestamp();
       received = 0;
       data = buffer.data;
       timestamp = buffer.timestamp;
@@ -1714,8 +1707,8 @@ static void *influxDB_sender(void *param)
       if (user_function != NULL){
         user_function(rhdl, user_params);
       }
-      unsigned long long end = get_timestamp();
-      printf("influx loop time %llu us\n", end - start);
+      // unsigned long long end = get_timestamp();
+      // printf("influx loop time %llu us\n", end - start);
     }
   }
   if (bytes == 0){
@@ -1737,7 +1730,7 @@ static void *mongoDB_sender(void *param)
   while((bytes = read(rhdl->mongo.pipe_read, &str + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
-      unsigned long long start = get_timestamp();
+      // unsigned long long start = get_timestamp();
       received = 0;
       err = store_extra_data(rhdl, str);
       free(str);
@@ -1748,8 +1741,8 @@ static void *mongoDB_sender(void *param)
                 "been disabled. Attempting to store and free remaining "
                 "resources in the pipe.\n");
       }
-      unsigned long long end = get_timestamp();
-      printf("mongo loop time %llu us\n", end - start);
+      // unsigned long long end = get_timestamp();
+      // printf("mongo loop time %llu us\n", end - start);
     }
   }
   if (bytes == 0){
@@ -1816,6 +1809,10 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                                   unsigned long long time_until_us,
                                   timestamp_array_t *timestamps)
 {
+  if (measurement_name == NULL){
+    fprintf(stderr, "Advanced qeury is invalid. You have to specify a valid"
+                    "measurement name.");
+  }
   char select_clause[32] = {0};
   if (function == NULL){
     snprintf(select_clause, 32, "\"value\"");

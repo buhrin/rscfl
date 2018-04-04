@@ -15,3 +15,4 @@ experiments/*
 *.order
 *.symvers
 *.pyc
+.vscode/c_cpp_properties.json
