@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
 #include <rscfl/user/res_api.h>
 
 #define ADVANCED_QUERY_PRINT(...)                                              \
@@ -15,15 +17,14 @@ void fn(rscfl_handle rhdl, void* p)
 {
   rscfl_token *tkn = p;
   if (tkn != NULL){
-    printf("Freeing token %d\n", tkn->id);
     rscfl_free_token(rhdl, tkn);
   }
 }
 
 int main(int argc, char** argv) {
   rscfl_handle rhdl;
-
-  rhdl = rscfl_init("test", 1);
+  printf("hi\n");
+  rhdl = rscfl_init("time", 1);
 
   if(rhdl == NULL) {
     fprintf(stderr,
@@ -38,38 +39,68 @@ int main(int argc, char** argv) {
   /*
    * Storing data into database
    */
-  int err, i;
+  int err, i, token_index;
   struct accounting acct;
-  rscfl_token *tkns[20] = {0};
+  rscfl_token *tkns[30] = {0};
 
-  for (i = 0; i < 10; i++){
+  for (i = 0; i < 100; i++){
+    if (!(i % 10)){
+      printf("Iteration %d\n", i);
+    }
     // fopen
-    if (rscfl_get_token(rhdl, &(tkns[2*i]))){
+    token_index = (3*i) % 30;
+    if (rscfl_get_token(rhdl, &(tkns[token_index]))) {
       fprintf(stderr, "Failed to get new token\n");
       break;
     }
-    err = rscfl_acct(rhdl, tkns[2*i], ACCT_START | TK_RESET_FL);
+    err = rscfl_acct(rhdl, tkns[token_index], ACCT_START | TK_RESET_FL);
     if (err)
       fprintf(stderr, "Error accounting for system call 1 [interest], loop %d\n", i);
+    unsigned long long start = get_timestamp();
     FILE* fp = fopen("rscfl_file", "w");
-    err = rscfl_acct(rhdl, tkns[2*i], TK_STOP_FL);
+    unsigned long long end = get_timestamp();
+    printf("fopen time %llu us\n", end - start);
+    err = rscfl_acct(rhdl, tkns[token_index], TK_STOP_FL);
     if (err)
       fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    rscfl_read_and_store_data(rhdl, "{\"function\":\"fopen\"}", tkns[2*i], &fn, tkns[2*i]);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fopen\"}", tkns[token_index], &fn, tkns[token_index]);
+
+    // // getuid
+    // token_index = (3*i + 1) % 30;
+    // if (rscfl_get_token(rhdl, &(tkns[token_index]))){
+    //   fprintf(stderr, "Failed to get new token\n");
+    //   break;
+    // }
+    // err = rscfl_acct(rhdl, tkns[token_index], ACCT_START | TK_RESET_FL);
+    // if (err)
+    //   fprintf(stderr, "Error accounting for system call 2 [interest], loop %d\n", i);
+    // start = get_timestamp();
+    // getuid();
+    // end = get_timestamp();
+    // printf("getuid time %llu us\n", end - start);
+    // err = rscfl_acct(rhdl, tkns[token_index], TK_STOP_FL);
+    // if (err)
+    //   fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
+    // rscfl_read_and_store_data(rhdl, "{\"function\":\"getuid\"}", tkns[token_index], &fn, tkns[token_index]);
 
     // fclose
-    if (rscfl_get_token(rhdl, &(tkns[2*i+1]))){
+    token_index = (3*i + 2) % 30;
+    if (rscfl_get_token(rhdl, &(tkns[token_index]))){
       fprintf(stderr, "Failed to get new token\n");
       break;
     }
-    err = rscfl_acct(rhdl, tkns[2*i+1], ACCT_START | TK_RESET_FL);
+    err = rscfl_acct(rhdl, tkns[token_index], ACCT_START | TK_RESET_FL);
     if (err)
-      fprintf(stderr, "Error accounting for system call 2 [interest], loop %d\n", i);
+      fprintf(stderr, "Error accounting for system call 3 [interest], loop %d\n", i);
+    start = get_timestamp();
     fclose(fp);
-    err = rscfl_acct(rhdl, tkns[2*i+1], TK_STOP_FL);
+    end = get_timestamp();
+    printf("fclose time %llu us\n", end - start);
+    err = rscfl_acct(rhdl, tkns[token_index], TK_STOP_FL);
     if (err)
       fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    rscfl_read_and_store_data(rhdl, "{\"function\":\"fclose\"}", tkns[2*i+1], &fn, tkns[2*i+1]);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fclose\"}", tkns[token_index], &fn, tkns[token_index]);
+    break;
   }
 
   /*
@@ -120,10 +151,10 @@ int main(int argc, char** argv) {
   // char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
   // printf("data:\n%s\n", extra_data);
   // rscfl_free_json(extra_data);
-  sleep(2);
-  char* result = rscfl_advanced_query(rhdl, "cpu.cycles", NULL,
-                                      "{\"extra_data\":\"no\"}", 5);
-  if (result) printf("\nresult:%s\n", result);
+  // sleep(2);
+  // char* result = rscfl_advanced_query(rhdl, "cpu.cycles", NULL,
+  //                                     "{\"extra_data\":\"no\"}", 5);
+  // if (result) printf("\nresult:%s\n", result);
 
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;

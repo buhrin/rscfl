@@ -875,6 +875,7 @@ query_result_t *rscfl_advanced_query_with_function_api(rscfl_handle rhdl,
   char *response;
   if (extra_data != NULL){
     timestamp_array_t array = rscfl_get_timestamps(rhdl, extra_data);
+    if (array.length == 0) return NULL;
     response = build_advanced_query(rhdl, measurement_name, function, subsystem_name,
                                     latest_n, time_since_us, time_until_us, &array);
   } else {
@@ -963,6 +964,7 @@ char *rscfl_advanced_query_api(rscfl_handle rhdl, char *measurement_name,
   char *response;
   if (extra_data != NULL){
     timestamp_array_t array = rscfl_get_timestamps(rhdl, extra_data);
+    if (array.length == 0) return NULL;
     response = build_advanced_query(rhdl, measurement_name, NULL, subsystem_name,
                                     latest_n, time_since_us, time_until_us, &array);
   } else {
@@ -1645,6 +1647,7 @@ static void *influxDB_sender(void *param)
   while((bytes = read(rhdl->influx.pipe_read, &buffer + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
+      unsigned long long start = get_timestamp();
       received = 0;
       data = buffer.data;
       timestamp = buffer.timestamp;
@@ -1667,16 +1670,16 @@ static void *influxDB_sender(void *param)
         EXTRACT_METRIC("cpu.cycles", sa_id.cpu.cycles, "%llu")
 
         wct = (long long)sa_id.cpu.wall_clock_time.tv_sec*1000000000 + (long long)sa_id.cpu.wall_clock_time.tv_nsec;
-        printf("s: %lld, ns: %lld, ttl: %lld\n",(long long)sa_id.cpu.wall_clock_time.tv_sec, (long long)sa_id.cpu.wall_clock_time.tv_nsec, wct);
+        // printf("s: %lld, ns: %lld, ttl: %lld\n",(long long)sa_id.cpu.wall_clock_time.tv_sec, (long long)sa_id.cpu.wall_clock_time.tv_nsec, wct);
         EXTRACT_METRIC("cpu.wall_clock_time", wct, "%lld")
 
         EXTRACT_METRIC("sched.cycles_out_local", sa_id.sched.cycles_out_local, "%llu")
 
         wct = (long long)sa_id.sched.wct_out_local.tv_sec*1000000000 + (long long)sa_id.sched.wct_out_local.tv_nsec;
-        printf("s: %lld, ns: %lld, ttl: %lld\n",(long long)sa_id.sched.wct_out_local.tv_sec, (long long)sa_id.sched.wct_out_local.tv_nsec, wct);
+        // printf("s: %lld, ns: %lld, ttl: %lld\n",(long long)sa_id.sched.wct_out_local.tv_sec, (long long)sa_id.sched.wct_out_local.tv_nsec, wct);
         EXTRACT_METRIC("sched.wct_out_local", wct, "%lld")
 
-        printf("subsystem_metrics:%s\n",subsystem_metrics);
+        // printf("subsystem_metrics:%s\n",subsystem_metrics);
 
         if(strlen(subsystem_metrics) > measurements_remaining_length){
           err = store_measurements(rhdl, measurements);
@@ -1688,7 +1691,7 @@ static void *influxDB_sender(void *param)
                     "resources in the pipe.\n");
             free_subsys_idx_set(data);
           }
-          printf("sent:%s\n",measurements);
+          // printf("sent:%s\n",measurements);
           memset(measurements, 0, MEASUREMENTS_BUFFER_SIZE);
           measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
         }
@@ -1707,10 +1710,12 @@ static void *influxDB_sender(void *param)
                 "been disabled. Attempting to store and free remaining "
                 "resources in the pipe.\n");
       }
-      printf("sent:%s\n",measurements);
+      // printf("sent:%s\n",measurements);
       if (user_function != NULL){
         user_function(rhdl, user_params);
       }
+      unsigned long long end = get_timestamp();
+      printf("influx loop time %llu us\n", end - start);
     }
   }
   if (bytes == 0){
@@ -1732,6 +1737,7 @@ static void *mongoDB_sender(void *param)
   while((bytes = read(rhdl->mongo.pipe_read, &str + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
+      unsigned long long start = get_timestamp();
       received = 0;
       err = store_extra_data(rhdl, str);
       free(str);
@@ -1742,6 +1748,8 @@ static void *mongoDB_sender(void *param)
                 "been disabled. Attempting to store and free remaining "
                 "resources in the pipe.\n");
       }
+      unsigned long long end = get_timestamp();
+      printf("mongo loop time %llu us\n", end - start);
     }
   }
   if (bytes == 0){
