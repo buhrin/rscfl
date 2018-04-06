@@ -1,0 +1,45 @@
+#!/bin/bash
+DATA_LOCATION=/home/bu214
+
+function store {
+    LENGTH=$(cat $1 | wc -l)
+    if [[ $LENGTH -gt 5000 ]] # if file has more than 5000 data points
+    then
+        split -l 5000 $1 "$DATA_LOCATION/split_$2_" # split it into small files every 5000 points
+        for f in $DATA_LOCATION/split_* # for each of the small files
+        do
+            [ -e $f ] || continue
+            curl -i -XPOST "http://localhost:8086/write?db=$db_name" --data-binary @$f # import small file
+            rm $f # and delete it
+        done
+    else # else if the file is shorter
+        curl -i -XPOST "http://localhost:8086/write?db=$db_name" --data-binary @$1 # import file
+    fi
+    rm $1 # delete the file
+}
+
+if nc -z 127.0.0.1 8086 # if the database is listening on its port
+then
+	# first, get the list of existing databases
+    db_array=( $(curl -XPOST 'http://localhost:8086/query' --data-urlencode 'q=SHOW DATABASES' | jq -c '.results[0].series[0].values[1:]|..|strings') )
+    for db_name in ${db_array[@]} # for every existing database, check if there is a file to import
+    do
+        db_name=${db_name//\"} # remove double quotes from around the string
+        if [ -e ~/InfluxDB_$db_name.txt ] #if such a file exists
+        then
+            store $DATA_LOCATION/InfluxDB_$db_name.txt $db_name # import data from it
+        fi
+    done
+
+    for f in $DATA_LOCATION/InfluxDB_*.txt # for every other file left to import, create the database for the app and import it
+    do
+        [ -e $f ] || continue # a guard to prevent the file with filename '~/InfluxDB_*.txt' entering this loop
+        db_name=${f#*_}       # remove anything before and including the underscore
+        db_name=${db_name%.*} # remove anything after and including the full stop
+        curl -XPOST 'http://localhost:8086/query' --data-urlencode "q=CREATE DATABASE $db_name" # create the database
+        store $f $db_name # import the data
+    done
+else # if the database is not listening on its port
+	echo "InfluxDB is not running, can't import data.";
+fi
+
