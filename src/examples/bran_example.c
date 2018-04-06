@@ -15,19 +15,30 @@
     printf("result was null\n");                                               \
   }
 
-void fn(rscfl_handle rhdl, void* p)
-{
-  rscfl_token *tkn = p;
-  if (tkn != NULL){
-    rscfl_free_token(rhdl, tkn);
+#define TIME_ADVANCED_QUERY(...)                                               \
+  start = get_timestamp();                                                     \
+  result = rscfl_advanced_query_with_function(rhdl, __VA_ARGS__);              \
+  if (result != NULL) {                                                        \
+    end = get_timestamp();                                                     \
+    printf("time: %llu\n", end - start);                                       \
+  } else {                                                                     \
+    printf("result was null\n");                                               \
   }
-}
+
+// void fn(rscfl_handle rhdl, void* p)
+// {
+//   rscfl_token *tkn = p;
+//   if (tkn != NULL){
+//     rscfl_free_token(rhdl, tkn);
+//   }
+// }
 
 int main(int argc, char** argv) {
   rscfl_handle rhdl;
-  rhdl = rscfl_init("time_no_queue", 1);
+  rhdl = rscfl_init("test", 1);
 
-  if(rhdl == NULL) {
+  if (rhdl == NULL)
+  {
     fprintf(stderr,
       "Unable to talk to rscfl kernel module.\n"
       "Check that:\n"
@@ -43,17 +54,18 @@ int main(int argc, char** argv) {
   int err, i, token_index;
   struct accounting acct;
   rscfl_token *tkns[30] = {0};
-  // unsigned long long timestamps[15];
 
   struct timespec ts;
   ts.tv_sec = 0;
   ts.tv_nsec = 150000000;
   for (i = 0; i < 100; i++){
-    // if (!(i % 10)){
-    //   printf("Iteration %d\n", i);
-    // }
+    break;
+    if (!(i % 10)){
+      printf("Iteration %d\n", i);
+    }
+
     // fopen
-    token_index = (3*i) % 30;
+    token_index = (2*i) % 30;
     if (rscfl_get_token(rhdl, &(tkns[token_index]))) {
       fprintf(stderr, "Failed to get new token\n");
       break;
@@ -65,13 +77,14 @@ int main(int argc, char** argv) {
     err = rscfl_acct(rhdl, tkns[token_index], TK_STOP_FL);
     if (err)
       fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    // timestamps[3*i] = get_timestamp();
-    rscfl_read_and_store_data(rhdl, NULL, tkns[token_index], &fn, tkns[token_index]);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fopen\"}",
+                              tkns[token_index], NULL, NULL);
 
     nanosleep(&ts, NULL);
 
     // // getuid
-    // token_index = (3*i + 1) % 30;
+    // // unsigned long long start = get_timestamp();
+    // token_index = (i % 200);
     // if (rscfl_get_token(rhdl, &(tkns[token_index]))){
     //   fprintf(stderr, "Failed to get new token\n");
     //   break;
@@ -83,25 +96,25 @@ int main(int argc, char** argv) {
     // err = rscfl_acct(rhdl, tkns[token_index], TK_STOP_FL);
     // if (err)
     //   fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    // timestamps[3*i + 1] = get_timestamp();
-    // rscfl_read_and_store_data(rhdl, "{\"function\":\"getuid\"}", tkns[token_index], &fn, tkns[token_index]);
-
+    // rscfl_read_and_store_data(rhdl, "{\"function\":\"getuid\"}", tkns[token_index], NULL, NULL);
+    // // unsigned long long end = get_timestamp();
+    // // printf("Loop time %llu", end - start);
     // nanosleep(&ts, NULL);
 
     // fclose
-    token_index = (3*i + 1) % 30;
+    token_index = (2*i + 1) % 30;
     if (rscfl_get_token(rhdl, &(tkns[token_index]))){
       fprintf(stderr, "Failed to get new token\n");
       break;
     }
     err = rscfl_acct(rhdl, tkns[token_index], ACCT_START | TK_RESET_FL);
     if (err)
-      fprintf(stderr, "Error accounting for system call 3 [interest], loop %d\n", i);
+      fprintf(stderr, "Error accounting for system call 2 [interest], loop %d\n", i);
     fclose(fp);
     if (err)
       fprintf(stderr, "Error stopping accounting for system call 2 [interest], loop %d\n", i);
-    // timestamps[3*i + 1] = get_timestamp();
-    rscfl_read_and_store_data(rhdl, NULL, tkns[token_index], &fn, tkns[token_index]);
+    rscfl_read_and_store_data(rhdl, "{\"function\":\"fclose\"}",
+                              tkns[token_index], NULL, NULL);
 
     nanosleep(&ts, NULL);
   }
@@ -154,61 +167,110 @@ int main(int argc, char** argv) {
   // char *extra_data = rscfl_get_extra_data(rhdl, 1517262516171014);
   // printf("data:\n%s\n", extra_data);
   // rscfl_free_json(extra_data);
-  sleep(2);
-  char* result = rscfl_query_measurements(rhdl, "select measurement_id from \"cpu.cycles\" where subsystem =~ /File/");
-  if (result) {
-    printf("\nresult:%s\n", result);
 
-    cJSON *response_json = cJSON_Parse(result);
-    free(result);
+  /*
+   * Timing measurements
+   */
 
-    cJSON *results_array = cJSON_GetObjectItem(response_json, "results");
-    cJSON *result_json = cJSON_GetArrayItem(results_array, 0);
-    cJSON *error = cJSON_GetObjectItem(result_json, "error");
-    if (error != NULL) {
-      if (cJSON_IsString(error) && (error->valuestring != NULL)) {
-        fprintf(stderr,
-                "Error occured.\nError: %s\n",
-                error->valuestring);
-      }
-      cJSON_Delete(response_json);
-      return -1;
-    }
-    unsigned long long db;
-    unsigned long long rs;
-    cJSON *series_array = cJSON_GetObjectItem(result_json, "series");
-    cJSON *series_json = cJSON_GetArrayItem(series_array, 0);
-    cJSON *values_array = cJSON_GetObjectItem(series_json, "values");
-    int index = 0;
-    while (true) {
-      cJSON *value_pair = cJSON_GetArrayItem(values_array, index);
-      if (value_pair == NULL) break;
-      cJSON *timestamp_db = cJSON_GetArrayItem(value_pair, 0);
-      cJSON *timestamp_rscfl = cJSON_GetArrayItem(value_pair, 1);
-      if (cJSON_IsNumber(timestamp_db))
-      {
-        db = (unsigned long long) timestamp_db->valuedouble;
-      } else {
-        printf("error %d, db\n", index);
-      }
-      if (cJSON_IsNumber(timestamp_rscfl))
-      {
-        rs = (unsigned long long) timestamp_rscfl->valuedouble;
-      } else {
-        printf("error %d, rs\n", index);
-      }
-      printf("%llu\n", db - rs);
-      index++;
-    }
-    cJSON_Delete(response_json);
-  } else {
-    printf("no result\n");
-  }
+  // char* result = rscfl_query_measurements(rhdl, "select measurement_id from \"cpu.cycles\" where subsystem =~ /File/");
+  // if (result) {
+  //   cJSON *response_json = cJSON_Parse(result);
+  //   free(result);
 
-  // int j;
-  // for(j = 0; j < 10; j++){
-  //   printf("timestamps[%d]=%llu", j, timestamps[j]);
+  //   cJSON *results_array = cJSON_GetObjectItem(response_json, "results");
+  //   cJSON *result_json = cJSON_GetArrayItem(results_array, 0);
+  //   cJSON *error = cJSON_GetObjectItem(result_json, "error");
+  //   if (error != NULL) {
+  //     if (cJSON_IsString(error) && (error->valuestring != NULL)) {
+  //       fprintf(stderr,
+  //               "Error occured.\nError: %s\n",
+  //               error->valuestring);
+  //     }
+  //     cJSON_Delete(response_json);
+  //     return -1;
+  //   }
+  //   unsigned long long db;
+  //   unsigned long long rs;
+  //   cJSON *series_array = cJSON_GetObjectItem(result_json, "series");
+  //   cJSON *series_json = cJSON_GetArrayItem(series_array, 0);
+  //   cJSON *values_array = cJSON_GetObjectItem(series_json, "values");
+  //   int index = 0;
+  //   while (true) {
+  //     cJSON *value_pair = cJSON_GetArrayItem(values_array, index);
+  //     if (value_pair == NULL) break;
+  //     cJSON *timestamp_db = cJSON_GetArrayItem(value_pair, 0);
+  //     cJSON *timestamp_rscfl = cJSON_GetArrayItem(value_pair, 1);
+  //     if (cJSON_IsNumber(timestamp_db))
+  //     {
+  //       db = (unsigned long long) timestamp_db->valuedouble;
+  //     } else {
+  //       printf("error %d, db\n", index);
+  //     }
+  //     if (cJSON_IsNumber(timestamp_rscfl))
+  //     {
+  //       rs = (unsigned long long) timestamp_rscfl->valuedouble;
+  //     } else {
+  //       printf("error %d, rs\n", index);
+  //     }
+  //     printf("%llu\n", db - rs);
+  //     index++;
+  //   }
+  //   cJSON_Delete(response_json);
+  // } else {
+  //   printf("no result\n");
   // }
+
+  /*
+   * Timing queries
+   */
+
+  unsigned long long start, end;
+  query_result_t *result;
+  char *response;
+  TIME_ADVANCED_QUERY("cpu.cycles", COUNT, NULL, NULL, 0)
+  TIME_ADVANCED_QUERY("cpu.cycles", COUNT, "Filesystems (vfs and infrastructure)", NULL, 0)
+  TIME_ADVANCED_QUERY("cpu.cycles", MAX, NULL, NULL, 0)
+  TIME_ADVANCED_QUERY("cpu.cycles", MAX, "Filesystems (vfs and infrastructure)", NULL, 0)
+
+  start = get_timestamp();
+  response = rscfl_query_measurements(rhdl, "select measurement_id from \"cpu.cycles\" where subsystem =~ /File/");
+  end = get_timestamp();
+  printf("time_basic: %llu\n", end - start);
+  if (response) free(response);
+
+  start = get_timestamp();
+  response = rscfl_get_extra_data(rhdl, 1517262516171014);
+  end = get_timestamp();
+  printf("time_ged: %llu\n", end - start);
+  if (response) free(response);
+
+  start = get_timestamp();
+  response = rscfl_advanced_query(rhdl, "cpu.cycles", NULL, NULL, 0);
+  end = get_timestamp();
+  printf("time_nofun: %llu\n", end - start);
+  if (response) free(response);
+
+  start = get_timestamp();
+  mongoc_cursor_t *cursor = rscfl_query_extra_data(rhdl, "{}", NULL);
+  char *string;
+  rscfl_get_next_json(cursor, &string);
+  end = get_timestamp();
+  printf("time_mongo: %llu\n", end - start);
+  rscfl_get_next_json(cursor, &string);
+  end = get_timestamp();
+  printf("time_mongo: %llu\n", end - start);
+  rscfl_get_next_json(cursor, &string);
+  end = get_timestamp();
+  printf("time_mongo: %llu\n", end - start);
+  if (string) free(string);
+
+  start = get_timestamp();
+  response = rscfl_advanced_query(rhdl, "cpu.cycles", NULL,
+                                        "{\"function\":\"fopen\"}", 5);
+  end = get_timestamp();
+  printf("time: %llu\n", end - start);
+  if (response) free(response);
+
 
   rscfl_persistent_storage_cleanup(rhdl);
   return 0;

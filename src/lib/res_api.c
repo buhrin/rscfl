@@ -47,8 +47,8 @@ DEFINE_REDUCE_FUNCTION(wc, struct timespec)
 #define EQUAL(A, B) strncmp(A, B, strlen(B)) == 0
 #define EXTRACT_METRIC(metric_name, metric_value, modifier)                  \
   snprintf(metric, METRIC_BUFFER_SIZE,                                       \
-           "%s,subsystem=%s value=" modifier ",measurement_id=%llu\n",  \
-           metric_name, subsystem_name, metric_value, timestamp); \
+           "%s,subsystem=%s value=" modifier ",measurement_id=%llu %llu\n",  \
+           metric_name, subsystem_name, metric_value, timestamp, timestamp); \
   strncat(subsystem_metrics, metric, METRIC_BUFFER_SIZE);                    \
   memset(metric, 0, METRIC_BUFFER_SIZE);
 
@@ -435,7 +435,7 @@ int rscfl_switch_token_api(rscfl_handle rhdl, rscfl_token *token_to, token_switc
 
 int rscfl_free_token(rscfl_handle rhdl, rscfl_token *token)
 {
-  //rscfl_debug dbg;
+  rscfl_debug dbg;
   //printf("Free for token %d, in_read: %d\n", token->id, token->in_use);
   if(token->in_use) {
     rscfl_token_list *new_hd;
@@ -699,6 +699,13 @@ int rscfl_read_and_store_data_api(rscfl_handle rhdl, char *info_json,
     }
     if(err) fprintf(stderr, "Error accounting for system call [data store into DB]\n");
   }
+
+  if (token != NULL){
+    err = rscfl_free_token(rhdl, token);
+    if (err)
+      fprintf(stderr, "Error freeing token %d\n", token->id);
+  }
+
   return err;
 }
 
@@ -1640,7 +1647,6 @@ static void *influxDB_sender(void *param)
   while((bytes = read(rhdl->influx.pipe_read, &buffer + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
-      // unsigned long long start = get_timestamp();
       received = 0;
       data = buffer.data;
       timestamp = buffer.timestamp;
@@ -1663,16 +1669,13 @@ static void *influxDB_sender(void *param)
         EXTRACT_METRIC("cpu.cycles", sa_id.cpu.cycles, "%llu")
 
         wct = (long long)sa_id.cpu.wall_clock_time.tv_sec*1000000000 + (long long)sa_id.cpu.wall_clock_time.tv_nsec;
-        // printf("s: %lld, ns: %lld, ttl: %lld\n",(long long)sa_id.cpu.wall_clock_time.tv_sec, (long long)sa_id.cpu.wall_clock_time.tv_nsec, wct);
         EXTRACT_METRIC("cpu.wall_clock_time", wct, "%lld")
 
         EXTRACT_METRIC("sched.cycles_out_local", sa_id.sched.cycles_out_local, "%llu")
 
         wct = (long long)sa_id.sched.wct_out_local.tv_sec*1000000000 + (long long)sa_id.sched.wct_out_local.tv_nsec;
-        // printf("s: %lld, ns: %lld, ttl: %lld\n",(long long)sa_id.sched.wct_out_local.tv_sec, (long long)sa_id.sched.wct_out_local.tv_nsec, wct);
         EXTRACT_METRIC("sched.wct_out_local", wct, "%lld")
 
-        // printf("subsystem_metrics:%s\n",subsystem_metrics);
 
         if(strlen(subsystem_metrics) > measurements_remaining_length){
           err = store_measurements(rhdl, measurements);
@@ -1684,7 +1687,6 @@ static void *influxDB_sender(void *param)
                     "resources in the pipe.\n");
             free_subsys_idx_set(data);
           }
-          // printf("sent:%s\n",measurements);
           memset(measurements, 0, MEASUREMENTS_BUFFER_SIZE);
           measurements_remaining_length = MEASUREMENTS_BUFFER_SIZE;
         }
@@ -1703,12 +1705,9 @@ static void *influxDB_sender(void *param)
                 "been disabled. Attempting to store and free remaining "
                 "resources in the pipe.\n");
       }
-      // printf("sent:%s\n",measurements);
       if (user_function != NULL){
         user_function(rhdl, user_params);
       }
-      // unsigned long long end = get_timestamp();
-      // printf("influx loop time %llu us\n", end - start);
     }
   }
   if (bytes == 0){
@@ -1730,7 +1729,6 @@ static void *mongoDB_sender(void *param)
   while((bytes = read(rhdl->mongo.pipe_read, &str + received, total - received)) > 0) {
     received += bytes;
     if (received == total){
-      // unsigned long long start = get_timestamp();
       received = 0;
       err = store_extra_data(rhdl, str);
       free(str);
@@ -1741,8 +1739,6 @@ static void *mongoDB_sender(void *param)
                 "been disabled. Attempting to store and free remaining "
                 "resources in the pipe.\n");
       }
-      // unsigned long long end = get_timestamp();
-      // printf("mongo loop time %llu us\n", end - start);
     }
   }
   if (bytes == 0){
@@ -1822,7 +1818,6 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
   if (subsystem_name == NULL && (function == NULL || EQUAL(function, MIN) || EQUAL(function, MAX))) {
     strncat(select_clause, ",\"subsystem\"", 32 - strlen(select_clause));
   }
-  // printf("\n\nselect_clause: %s\n", select_clause);
 
   char *subsystem_constraint = "";
   if (subsystem_name != NULL) {
@@ -1830,7 +1825,6 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
     snprintf(subsystem_constraint, strlen(subsystem_name) + 32,
              "\"subsystem\" = \'%s\'", subsystem_name);
   }
-  // printf("subsystem_constraint: %s\n", subsystem_constraint);
 
   char time_constraint[128] = {0};
   unsigned long long time_since_ns = time_since_us * 1000;
@@ -1850,7 +1844,6 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
     // time_until_ns != 0
     snprintf(time_constraint, 128, "\"time\" <= %llu", time_until_ns);
   }
-  // printf("time_constraint: %s\n", time_constraint);
 
   char *measurement_ids = "";
   if (timestamps != NULL && timestamps->ptr != NULL){
@@ -1862,7 +1855,6 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
                " OR \"measurement_id\" = \'%llu\'", timestamps->ptr[i]); // append to the end
     }
   }
-  // printf("measurement_ids: %s\n", measurement_ids);
 
   char *where_clause = "";
   if (measurement_ids[0] != '\0' || time_constraint[0] != '\0' || subsystem_constraint[0] != '\0'){
@@ -1899,12 +1891,10 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
       }
     }
   }
-  // printf("where_clause: %s\n", where_clause);
   char order_clause[64] = {0};
   if (latest_n != 0){
     snprintf(order_clause, 64, " ORDER BY time DESC LIMIT %d", latest_n);
   }
-  // printf("order_clause: %s\n", order_clause);
 
   char *empty_query;
   int query_length = strlen(where_clause) + strlen(measurement_name) +
@@ -1920,7 +1910,6 @@ static char *build_advanced_query(rscfl_handle rhdl, char *measurement_name,
   }
   snprintf(query, query_length, empty_query, select_clause, measurement_name,
            where_clause, order_clause);
-  printf("query: %s\n", query);
   char *response = rscfl_query_measurements(rhdl, query);
 
   if (subsystem_constraint[0] != '\0') free(subsystem_constraint);
