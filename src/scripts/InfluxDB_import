@@ -9,11 +9,11 @@ function store {
         for f in $DATA_LOCATION/split_* # for each of the small files
         do
             [ -e $f ] || continue
-            curl -i -XPOST "http://localhost:8086/write?db=$db_name" --data-binary @$f # import small file
+            curl -i -XPOST "http://localhost:8086/write?db=$db_name&precision=u" --data-binary @$f # import small file
             rm $f # and delete it
         done
     else # else if the file is shorter
-        curl -i -XPOST "http://localhost:8086/write?db=$db_name" --data-binary @$1 # import file
+        curl -i -XPOST "http://localhost:8086/write?db=$db_name&precision=u" --data-binary @$1 # import file
     fi
     rm $1 # delete the file
 }
