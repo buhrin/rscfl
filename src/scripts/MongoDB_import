@@ -3,7 +3,7 @@ if nc -z 127.0.0.1 27017 # if the database is listening on its port
 then
     for f in ~/MongoDB_*.json # for every file to import, create the database for the app and import it
     do
-        [ -e $f ] || continue # a guard to prevent the file with filename '~/InfluxDB_*.txt' entering this loop
+        [ -e $f ] || continue # a guard to prevent the file with filename '~/MongoDB_*.json' entering this loop
         db_name=${f#*_}       # remove anything before and including the underscore 
         db_name=${db_name%.*} # remove anything after and including the full stop
         mongoimport -d $db_name -c main_collection --file $f # import the data

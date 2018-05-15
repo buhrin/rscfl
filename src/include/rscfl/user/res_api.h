@@ -230,8 +230,10 @@ typedef struct subsys_idx_set subsys_idx_set;
  * \param cfg     rscfl configuration. use the same configuration for all
  */
 #define rscfl_init_1(cfg) rscfl_init_api(RSCFL_VERSION, cfg, NULL, 0)
-#define rscfl_init_2(app_name, need_extra_data) rscfl_init_api(RSCFL_VERSION, NULL, app_name, need_extra_data)
-#define rscfl_init_3(cfg, app_name, need_extra_data) rscfl_init_api(RSCFL_VERSION, cfg, app_name, need_extra_data)
+#define rscfl_init_2(app_name, need_extra_data) \
+  rscfl_init_api(RSCFL_VERSION, NULL, app_name, need_extra_data)
+#define rscfl_init_3(cfg, app_name, need_extra_data) \
+  rscfl_init_api(RSCFL_VERSION, cfg, app_name, need_extra_data)
 /**
  * Initialises rscfl for the calling thread.
  *
@@ -267,7 +269,8 @@ typedef struct subsys_idx_set subsys_idx_set;
  *  * RSCFL_ERR_VERSION_MISMATCH (in config.h).
  *  * The ERR_ON_VERSION_MISMATCH cmake build option.
  */
-rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config, char *app_name, bool need_extra_data);
+rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config *config,
+                            char *app_name, bool need_extra_data);
 
 /*
  * Call at the end of your program to free up all resources associated with
@@ -276,11 +279,14 @@ rscfl_handle rscfl_init_api(rscfl_version_t ver, rscfl_config* config, char *app
  */
 void rscfl_persistent_storage_cleanup(rscfl_handle rhdl);
 
-#define rscfl_get_handle(...) CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_get_handle(...) \
+  CONCAT(rscfl_get_handle_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_get_handle_0() rscfl_get_handle_api(NULL, NULL, 0)
 #define rscfl_get_handle_1(cfg) rscfl_get_handle_api(cfg, NULL, 0)
-#define rscfl_get_handle_2(app_name, need_extra_data) rscfl_get_handle_api(NULL, app_name, need_extra_data)
-#define rscfl_get_handle_3(cfg, app_name, need_extra_data) rscfl_get_handle_api(cfg, app_name, need_extra_data)
+#define rscfl_get_handle_2(app_name, need_extra_data) \
+  rscfl_get_handle_api(NULL, app_name, need_extra_data)
+#define rscfl_get_handle_3(cfg, app_name, need_extra_data) \
+  rscfl_get_handle_api(cfg, app_name, need_extra_data)
 
 /**
  * Returns the rscfl handle for the current thread. If rscfl was not
@@ -294,7 +300,8 @@ void rscfl_persistent_storage_cleanup(rscfl_handle rhdl);
  * :type cfg:     rscfl_config*
  * :param token:  an inexistent token
  */
-rscfl_handle rscfl_get_handle_api(rscfl_config *cfg, char *app_name, bool need_extra_data);
+rscfl_handle rscfl_get_handle_api(rscfl_config *cfg, char *app_name,
+                                  bool need_extra_data);
 
 /*
  * If successful returns 0, and sets the value of *token to be a new token.
@@ -306,10 +313,14 @@ rscfl_handle rscfl_get_handle_api(rscfl_config *cfg, char *app_name, bool need_e
  */
 int rscfl_get_token(rscfl_handle rhdl, rscfl_token **token);
 
-#define rscfl_switch_token(...) CONCAT(rscfl_switch_token_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
-#define rscfl_switch_token_2(handle, token) rscfl_switch_token_api(handle, token, SW_TK_DEFAULT)
-#define rscfl_switch_token_3(handle, token, fl) rscfl_switch_token_api(handle, token, fl)
-int rscfl_switch_token_api(rscfl_handle rhdl, rscfl_token *token_to, token_switch_flags fl);
+#define rscfl_switch_token(...) \
+  CONCAT(rscfl_switch_token_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_switch_token_2(handle, token) \
+  rscfl_switch_token_api(handle, token, SW_TK_DEFAULT)
+#define rscfl_switch_token_3(handle, token, fl) \
+  rscfl_switch_token_api(handle, token, fl)
+int rscfl_switch_token_api(rscfl_handle rhdl, rscfl_token *token_to,
+                           token_switch_flags fl);
 
 /*
  * Returns an int as we put the token on a reuse list. Allocation of
@@ -326,10 +337,13 @@ int rscfl_free_token(rscfl_handle, rscfl_token *);
 #define rscfl_acct_3(handle, token, fl) rscfl_acct_api(handle, token, fl)
 int rscfl_acct_api(rscfl_handle, rscfl_token *token, interest_flags fl);
 
-#define rscfl_read_acct(...) CONCAT(rscfl_read_acct_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
+#define rscfl_read_acct(...) \
+  CONCAT(rscfl_read_acct_, VARGS_NR(__VA_ARGS__))(__VA_ARGS__)
 #define rscfl_read_acct_2(handle, acct) rscfl_read_acct_api(handle, acct, NULL)
-#define rscfl_read_acct_3(handle, acct, token) rscfl_read_acct_api(handle, acct, token)
-int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct, rscfl_token *token);
+#define rscfl_read_acct_3(handle, acct, token) \
+  rscfl_read_acct_api(handle, acct, token)
+int rscfl_read_acct_api(rscfl_handle handle, struct accounting *acct,
+                        rscfl_token *token);
 
 /*
  * Used to generate an ID for a measurement when calling rscfl_store_data(), or
